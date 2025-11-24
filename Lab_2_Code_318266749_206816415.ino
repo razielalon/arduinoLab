@@ -3,415 +3,372 @@
 #define BAUD_RATE 9600
 #define RX_pin 2
 #define TX_pin 3
-#define BIT_TIME 10
+#define BIT_TIME 20
 #define SAMP_NUM 3
 #define DATA_BITS 8
 
+// --- Layer 1 Enums ---
 enum StateType {
-  IDLE,
-  START,
-  DATA,
-  PARITY,
-  STOP,
-  ERROR
+  IDLE, START, DATA, PARITY, STOP, ERROR
 };
 
-enum l2_tx_state {
-  IDLE,
-  SEND_MSB,
-  SEND_LSB
+// --- Layer 2 Enums ---
+enum Layer2TxState {
+  L2_TX_IDLE,
+  L2_TX_SEND_LOW,
+  L2_TX_WAIT_LOW,
+  L2_TX_SEND_HIGH,
+  L2_TX_WAIT_HIGH
 };
 
-int tx_bit_idx, tx_letter_idx, rx_bit, samp_idx, rx_bit_idx;
+enum Layer2RxState {
+  L2_RX_WAIT_LOW,
+  L2_RX_WAIT_HIGH
+};
+
+// --- Layer 1 Globals ---
+int tx_bit_idx, rx_bit, samp_idx, rx_bit_idx; 
 int del, i, bit, ones, t_ones, parity, r_parity, majority;
-int delay1;
 unsigned long punish_time;
 unsigned char t_letter;
-unsigned char l2_output;
-bool l1_tx_busy, l2_tx_busy;
-char name[] = "ELAD\n";
 byte samp_reg;
 unsigned char char_reg;
-unsigned long curr, curr_rx, start_time, delay_time, start_punish_time, prev_samp_time;
+unsigned long curr, curr_rx, start_time, start_punish_time, prev_samp_time;
 StateType TxState, RxState;
-l2_tx_state l2_tx;
+
+// --- Layer 1 Interface Flags ---
+bool layer_2_req_tx = false;      
+byte layer_2_tx_data = 0;         
+bool layer_1_tx_busy = false;     
+bool layer_1_rx_ready = false;    
+byte layer_1_rx_data = 0;         
+
+// --- Layer 2 Globals ---
+Layer2TxState l2_tx_state = L2_TX_IDLE;
+Layer2RxState l2_rx_state = L2_RX_WAIT_LOW;
+char l2_tx_buffer;                // Stores the char being sent
+byte l2_rx_temp_nibble;           // Stores the first received nibble
 
 void setup()
 {
   Serial.begin(BAUD_RATE);
-
   pinMode(TX_pin, OUTPUT);
   pinMode(RX_pin, INPUT);
+  digitalWrite(TX_pin, 1); 
 
   start_time = millis();
   curr = millis();
-
   TxState = IDLE;
   RxState = IDLE;
-  l2_tx = IDLE;
-
   del = BIT_TIME / (SAMP_NUM + 2);
-  delay1 = 0;
 
-  tx_letter_idx = 0;
   tx_bit_idx = 0;
-
   t_ones = 0;
   ones = 0;
-
   r_parity = 0;
   majority = 0;
-  Serial.println("sending");
-  char a = Hamming47_tx('a', 0);
-  Serial.println("reciving");
-  a = 0b01110110;
-  Hamming47_rx(a);
 }
 
-void layer1_tx()
-{
-  curr = millis();
+// ==========================================
+//          HAMMING CODE HELPERS
+// ==========================================
 
-  if ((delay1 == 1) && (curr - start_time >= delay_time)) {
-    delay1 = 0;
+// Hamming (7,4) Encoding
+// Input: 4 bits of data (in the lower 4 bits of the byte)
+// Output: 7 bits of Hamming code
+byte hamming_encode(byte data) {
+  // Data bits: d1=bit0, d2=bit1, d3=bit2, d4=bit3
+  byte d1 = (data >> 0) & 0x01;
+  byte d2 = (data >> 1) & 0x01;
+  byte d3 = (data >> 2) & 0x01;
+  byte d4 = (data >> 3) & 0x01;
+
+  // Calculate Parity bits
+  // p1 covers 1, 3, 5, 7 (d1, d2, d4)
+  byte p1 = d1 ^ d2 ^ d4;
+  
+  // p2 covers 2, 3, 6, 7 (d1, d3, d4)
+  byte p2 = d1 ^ d3 ^ d4;
+  
+  // p4 covers 4, 5, 6, 7 (d2, d3, d4)
+  byte p4 = d2 ^ d3 ^ d4;
+
+  // Construct packet: (MSB) 0 d4 d3 d2 p4 d1 p2 p1 (LSB)
+  // Bit positions:          7  6  5  4  3  2  1
+  byte packet = (d4 << 6) | (d3 << 5) | (d2 << 4) | (p4 << 3) | (d1 << 2) | (p2 << 1) | p1;
+  
+  return packet;
+}
+
+// Hamming (7,4) Decoding and Correction
+// Input: 7 bit packet
+// Output: 4 bits of corrected data
+byte hamming_decode(byte packet) {
+  // Extract bits
+  byte p1 = (packet >> 0) & 0x01;
+  byte p2 = (packet >> 1) & 0x01;
+  byte d1 = (packet >> 2) & 0x01;
+  byte p4 = (packet >> 3) & 0x01;
+  byte d2 = (packet >> 4) & 0x01;
+  byte d3 = (packet >> 5) & 0x01;
+  byte d4 = (packet >> 6) & 0x01;
+
+  // Calculate Syndrome
+  byte s1 = p1 ^ d1 ^ d2 ^ d4; // Check pos 1,3,5,7
+  byte s2 = p2 ^ d1 ^ d3 ^ d4; // Check pos 2,3,6,7
+  byte s4 = p4 ^ d2 ^ d3 ^ d4; // Check pos 4,5,6,7
+
+  byte error_pos = (s4 << 2) | (s2 << 1) | s1;
+
+  if (error_pos != 0) {
+    Serial.print("L2: Correction! Error at bit: ");
+    Serial.println(error_pos);
+    
+    // Flip the bit at error_pos (converting 1-based index to 0-based shift)
+    // Note: Our packet layout matches the syndrome math directly
+    packet ^= (1 << (error_pos - 1));
+    
+    // Re-extract bits after correction
+    d1 = (packet >> 2) & 0x01;
+    d2 = (packet >> 4) & 0x01;
+    d3 = (packet >> 5) & 0x01;
+    d4 = (packet >> 6) & 0x01;
   }
 
-  if (delay1 == 0) {
+  return (d4 << 3) | (d3 << 2) | (d2 << 1) | d1;
+}
 
-    if (TxState == IDLE) {
+// ==========================================
+//          LAYER 2 FUNCTIONS
+// ==========================================
+
+void Layer2_TX(char c) {
+  // If IDLE, accept new char and start process
+  if (l2_tx_state == L2_TX_IDLE) {
+    l2_tx_buffer = c;
+    l2_tx_state = L2_TX_SEND_LOW;
+  }
+}
+
+void Layer2_TX_Loop() {
+  switch (l2_tx_state) {
+    case L2_TX_IDLE:
+      // Do nothing, waiting for call to Layer2_TX(char)
+      break;
+
+    case L2_TX_SEND_LOW:
+      if (!layer_1_tx_busy) {
+        byte low_nibble = l2_tx_buffer & 0x0F;
+        layer_2_tx_data = hamming_encode(low_nibble);
+        layer_2_req_tx = true;
+        l2_tx_state = L2_TX_WAIT_LOW;
+      }
+      break;
+
+    case L2_TX_WAIT_LOW:
+      // Wait for L1 to raise busy (ack) then drop busy (done)
+      // Simplification: just wait for busy to be false (assuming it went true instantly or we check logic)
+      // Better logic: Check if L1 accepted request (req set to false by L1)
+      if (layer_2_req_tx == false && layer_1_tx_busy == false) {
+         l2_tx_state = L2_TX_SEND_HIGH;
+      }
+      break;
+
+    case L2_TX_SEND_HIGH:
+      if (!layer_1_tx_busy) {
+        byte high_nibble = (l2_tx_buffer >> 4) & 0x0F;
+        layer_2_tx_data = hamming_encode(high_nibble);
+        layer_2_req_tx = true;
+        l2_tx_state = L2_TX_WAIT_HIGH;
+      }
+      break;
+
+    case L2_TX_WAIT_HIGH:
+      if (layer_2_req_tx == false && layer_1_tx_busy == false) {
+         l2_tx_state = L2_TX_IDLE;
+         Serial.println("L2 TX: Sent Full Char");
+      }
+      break;
+  }
+}
+
+void Layer2_RX_Loop() {
+  if (layer_1_rx_ready) {
+    byte raw_packet = layer_1_rx_data;
+    layer_1_rx_ready = false; // Acknowledge L1
+
+    byte decoded_data = hamming_decode(raw_packet);
+
+    if (l2_rx_state == L2_RX_WAIT_LOW) {
+      l2_rx_temp_nibble = decoded_data; // Store lower nibble
+      l2_rx_state = L2_RX_WAIT_HIGH;
+    } 
+    else if (l2_rx_state == L2_RX_WAIT_HIGH) {
+      char final_char = (decoded_data << 4) | l2_rx_temp_nibble;
+      Serial.print("L2 RX Final: ");
+      Serial.println(final_char);
+      l2_rx_state = L2_RX_WAIT_LOW; // Reset for next char
+    }
+  }
+}
+
+// ==========================================
+//          LAYER 1 (PHYSICAL)
+// ==========================================
+
+void Uart_TX() {
+  curr = millis();
+  if (TxState == IDLE) {
+    if (layer_2_req_tx == true) {
+      layer_1_tx_busy = true;
+      t_letter = layer_2_tx_data; 
+      layer_2_req_tx = false; 
       start_time = millis();
       TxState = START;
-
       tx_bit_idx = 0;
-      digitalWrite(TX_pin, 0);
+      digitalWrite(TX_pin, 0); 
     }
-
+  }
+  else {
     if ((curr - start_time) >= BIT_TIME) {
       start_time = curr;
-
       if (TxState == START) {
         TxState = DATA;
-        //
-        //t_letter = name[tx_letter_idx];
-        //
-
-        // if can send
-        t_letter = l2_output;
-        /// l1_tx_busy = 1;
-
         bit = bitRead(t_letter, tx_bit_idx);
         digitalWrite(TX_pin, bit);
       }
-
       else if (TxState == DATA) {
-
         tx_bit_idx++;
-
         if (tx_bit_idx < DATA_BITS) {
           bit = bitRead(t_letter, tx_bit_idx);
           digitalWrite(TX_pin, bit);
         }
-
         else {
           TxState = PARITY;
-
           ones = 0;
           for (i = 0; i < DATA_BITS; i++) {
-            if (bitRead(t_letter, i)) {
-              ones++;
-            }
+            if (bitRead(t_letter, i)) ones++;
           }
-
-          parity = (ones % 2 == 0) ? 1 : 0;
-
+          parity = (ones % 2 == 0) ? 1 : 0; 
           digitalWrite(TX_pin, parity);
-
         }
       }
-
       else if (TxState == PARITY) {
         TxState = STOP;
-        digitalWrite(TX_pin, 1);
-
+        digitalWrite(TX_pin, 1); 
       }
-
       else if (TxState == STOP) {
-
         TxState = IDLE;
         digitalWrite(TX_pin, 1);
-
-        delay1 = 1;
-        start_time = curr;
-        //delay_time = random(500, 2000);
-        /// l1_tx_busy = 0;
-        /// l2_tx_busy = 0;
-
-        tx_letter_idx++;
-        if (tx_letter_idx >= strlen(name)) {
-
-          tx_letter_idx = 0;
-        }
+        layer_1_tx_busy = false; 
       }
     }
   }
 }
 
-void layer1_rx()
-{
+void Uart_RX() {
   curr_rx = millis();
   rx_bit = digitalRead(RX_pin);
 
-  if ((RxState == IDLE) && (rx_bit == 0)) { // got 0, enter START state
-
-
+  if ((RxState == IDLE) && (rx_bit == 0)) { 
     RxState = START;
     prev_samp_time = curr_rx;
     samp_idx = 0;
   }
-
-  else { // not on IDLE, need to sample
-
+  else { 
     if ((RxState != IDLE) && (RxState != ERROR) && (curr_rx - prev_samp_time >= del)) {
-
-      bitWrite(samp_reg, samp_idx, digitalRead(RX_pin)); // write to the samp register(holds 5 samples)
-
+      bitWrite(samp_reg, samp_idx, digitalRead(RX_pin)); 
       prev_samp_time = curr_rx;
       samp_idx++;
 
-      if (samp_idx == SAMP_NUM + 2) { // if finished 5 samples
-
-        if (RxState == START) { // handling START state samples (reading 0 bit)
-
-          //calculate majority (hold on start_bit var):
+      if (samp_idx == SAMP_NUM + 2) { 
+        if (RxState == START) { 
           int mid_sum = bitRead(samp_reg,1) + bitRead(samp_reg,2) + bitRead(samp_reg,3);
           int start_bit = (mid_sum >= 2) ? 1 : 0;
-
-          if (start_bit == 1) { // start bit is expected to be 0!
-            Serial.println("RX: ERROR - bad START bit");
+          if (start_bit == 1) { 
             RxState = ERROR;
             start_punish_time = curr_rx;
             punish_time = BIT_TIME * (1 + DATA_BITS + 1 + 1);
           }
-          else { // good start bit (read 0)
+          else { 
             RxState = DATA;
             rx_bit_idx = 0;
             t_ones = 0;
           }
-
           samp_idx = 0;
         }
-
-
-        else if (RxState == DATA) { // handling DATA state sampling (reading a letter -one bit at a time)
-
-          //calculating majority for each bit in idx
+        else if (RxState == DATA) { 
           int mid_sum = bitRead(samp_reg,1) + bitRead(samp_reg,2) + bitRead(samp_reg,3);
           majority = (mid_sum >= 2) ? 1 : 0;
-
-          if (rx_bit_idx < DATA_BITS) { // didnt got to the final bit in a letter
-            bitWrite(char_reg, rx_bit_idx, majority); //writing the majority chosen bit to the corresponding index on the char
-
-            if (majority == 1) { // adding 1 to t_ones in order to calculate parity
-              t_ones++;
-            }
-            rx_bit_idx++;
+          if (rx_bit_idx < DATA_BITS) { 
+            bitWrite(char_reg, rx_bit_idx, majority); 
+            if (majority == 1) t_ones++;
+            rx_bit_idx++; 
           }
-
-          else { // ended cahracter, getting parity
+          else { 
             r_parity = majority;
-            if ((t_ones % 2) != r_parity) { // if parity good
-              RxState = STOP;
-            }
-            else { // if parity bad
-              Serial.println("RX: ERROR - bad parity");
+            if ((t_ones % 2) != r_parity) RxState = STOP;
+            else { 
               RxState = ERROR;
               start_punish_time = curr;
-              punish_time = BIT_TIME * (DATA_BITS + 3); // time of (char + start + stop + parity) bits
+              punish_time = BIT_TIME * (DATA_BITS + 3); 
             }
           }
-
           samp_idx = 0;
         }
-
-
-        else if (RxState == STOP) { // handling STOP state
-
+        else if (RxState == STOP) { 
           int mid_sum = bitRead(samp_reg,1) + bitRead(samp_reg,2) + bitRead(samp_reg,3);
           majority = (mid_sum >= 2) ? 1 : 0;
-
           samp_idx = 0;
-
-          if (majority == 1) { // stop bit is 1
-
-            Serial.print((char)char_reg); // print the recived char
-
-            RxState = IDLE;
+          if (majority == 1) { 
+            layer_1_rx_data = char_reg; 
+            layer_1_rx_ready = true;    
+            RxState = IDLE; 
           }
-          else { // stop bit isnt 1
-            Serial.println("RX: ERROR - bad STOP bit");
+          else { 
             RxState = ERROR;
             start_punish_time = curr_rx;
             punish_time = BIT_TIME * (DATA_BITS + 3);
           }
         }
-
       }
-    }
-  }
-
+    }  
+  }    
   if ((RxState == ERROR) && (curr_rx - start_punish_time >= punish_time)) {
     RxState = IDLE;
-    Serial.println("RX: leaving ERROR, back to IDLE");
   }
 }
 
-void layer2_tx(unsigned char letter){
-  switch (l2_tx){
-    case IDLE :
-      char msb = Hamming47_tx(letter, 0);
-      char lsb = Hamming47_tx(letter, 1);
-      if(Tx_State == IDLE){
-        l2_output = msb;
-        l2_tx = SEND_MSB;
-      }
-      break;
-    case SEND_MSB:
-      if(Tx_State == IDLE){
-        l2_output = lsb;
-        l2_tx = SEND_LSB;
-      }
-      break;
-    case SEND_LSB:
-      if(Tx_State == IDLE){
-        l2_output = lsb;
-        l2_tx = SEND_LSB;
-      }
-      break;
+// ==========================================
+//               MAIN LOOP
+// ==========================================
+
+char msg[] = "RAZIEL\n";
+int msg_idx = 0;
+unsigned long last_app_action = 0;
+
+void loop()
+{
+  // 1. Run Layer 1 Drivers (Physical)
+  Uart_TX();
+  Uart_RX();
+
+  // 2. Run Layer 2 Logic (Data Link / Error Correction)
+  Layer2_TX_Loop();
+  Layer2_RX_Loop();
+
+  // 3. Application Simulation (User typing a message)
+  if (millis() - last_app_action > 3000) {
+    // Only send if Layer 2 is Idle (ready for a new FULL char)
+    if (l2_tx_state == L2_TX_IDLE) {
+      Serial.print("App Sending: ");
+      Serial.println(msg[msg_idx]);
+      
+      Layer2_TX(msg[msg_idx]); // Hand char to Layer 2
+
+      msg_idx++;
+      if (msg_idx >= strlen(msg)) msg_idx = 0;
+      last_app_action = millis();
+    }
   }
-  char msb = Hamming47_tx(letter, 0);
-  char lsb = Hamming47_tx(letter, 1);
-
-  // check if can send
-
-  // if yes
-  if((l1_tx_busy == 0) && (l2_tx_busy == 0)){
-    l2_output = msb;
-    l2_tx_busy = 1;
-  }
-
-  // if sent
-  if((l1_tx_busy == 0) && (l2_tx_busy == 0)){
-    l2_output = lsb;
-    l2_tx_busy = 1;
-  }
-}
-
-void layer2_rx(){
-  // getting the first 8 bit
-
-}
-
-void printByteBits(unsigned char b) {
-  for (int i = 7; i >= 0; i--) {
-    Serial.print(bitRead(b, i));
-  }
-}
-
-unsigned char Hamming47_tx(unsigned char eight_bit_char, unsigned char is_lsb){
-  Serial.print("Input:  ");
-  printByteBits(eight_bit_char);
-  Serial.println();
-
-  unsigned char half_word, output;
-  unsigned char d1, d2, d3, d4;
-  unsigned char p1, p2, p3;
-
-  if (is_lsb) {
-    half_word = eight_bit_char & 0x0F;
-  } else {
-    half_word = (eight_bit_char >> 4) & 0x0F;
-  }
-  Serial.print("half_word:  ");
-  printByteBits(half_word);
-  Serial.println();
-
-
-  d1 = bitRead(half_word, 3);
-  d2 = bitRead(half_word, 2);
-  d3 = bitRead(half_word, 1);
-  d4 = bitRead(half_word, 0);
-
-  p1 = d1 ^ d2 ^ d4;
-  p2 = d1 ^ d3 ^ d4;
-  p3 = d2 ^ d3 ^ d4;
-
-  output = 0;
-  bitWrite(output, 6, p1);
-  bitWrite(output, 5, p2);
-  bitWrite(output, 4, d1);
-  bitWrite(output, 3, p3);
-  bitWrite(output, 2, d2);
-  bitWrite(output, 1, d3);
-  bitWrite(output, 0, d4);
-  bitWrite(output, 7, 0);
-
-  Serial.print("Output: ");
-  printByteBits(output);
-  Serial.println();
-
-  return output;
-}
-
-void Hamming47_rx(unsigned char eight_bit_char_rx){
-  Serial.println("recived char: ");
-  printByteBits(eight_bit_char_rx);
-  unsigned char output;
-  unsigned char d1, d2, d3, d4;
-  unsigned char p1, p2, p3;
-  unsigned char s1, s2, s3;
-
-  d1 = bitRead(eight_bit_char_rx, 2);
-  d2 = bitRead(eight_bit_char_rx, 4);
-  d3 = bitRead(eight_bit_char_rx, 5);
-  d4 = bitRead(eight_bit_char_rx, 6);
-
-  p1 = bitRead(eight_bit_char_rx, 0);
-  p2 = bitRead(eight_bit_char_rx, 1);
-  p3 = bitRead(eight_bit_char_rx, 3);
-
-  s1 = p1 ^ d1 ^ d2 ^ d4;
-  s2 = p2 ^ d1 ^ d3 ^ d4;
-  s3 = p3 ^ d2 ^ d3 ^ d4;
-
-  unsigned char syndrome = (s3 << 2) | (s2 << 1) | s1;
-
-  Serial.print("Syndrome = ");
-  Serial.println(syndrome);
-
-  switch (syndrome) {
-    case 0: Serial.println("No error"); break;
-    case 1: Serial.println("Error in bit 1"); break;
-    case 2: Serial.println("Error in bit 2"); break;
-    case 3: Serial.println("Error in bit 3"); break;
-    case 4: Serial.println("Error in bit 4"); break;
-    case 5: Serial.println("Error in bit 5"); break;
-    case 6: Serial.println("Error in bit 6"); break;
-    case 7: Serial.println("Error in bit 7"); break;
-  }
-
-  if (syndrome != 0) {
-    unsigned char bit_index = syndrome - 1;
-    eight_bit_char_rx ^= (1 << bit_index);
-  }
-
-  Serial.println("fixed char:");
-  printByteBits(eight_bit_char_rx);
-}
-
-void loop(){
-
-  //layer2_tx(); // Calls Hamming47_tx() or CRC4_tx()
-  //layer2_rx(); // Calls the Rx version of the above
-  //layer1_tx(); // Either uart_tx() or usart_tx() from Labs 1/2
-  //layer1_rx(); // Rx version of the above
 }
