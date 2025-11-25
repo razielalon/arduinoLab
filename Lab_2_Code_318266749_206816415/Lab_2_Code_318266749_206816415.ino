@@ -7,6 +7,12 @@
 #define SAMP_NUM 3
 #define DATA_BITS 8
 
+// making errors on purpose
+#define NUM_ERR_BITS  0   // 0,1,2,3
+#define ERR_BIT_1     -1
+#define ERR_BIT_2     -1
+#define ERR_BIT_3     -1
+
 enum StateType {
   IDLE, START, DATA, PARITY, STOP, ERROR
 };
@@ -22,6 +28,12 @@ enum Layer2TxState {
 enum Layer2RxState {
   L2_RX_WAIT_LOW,
   L2_RX_WAIT_HIGH
+};
+
+enum L2_Check_Mode {
+  CHECK_IDLE,
+  CHECK_HAMMING,
+  CHECK_CRC
 };
 
 // --- Layer 1 Globals ---
@@ -44,11 +56,15 @@ byte layer_1_rx_data = 0;
 // --- Layer 2 Globals ---
 Layer2TxState l2_tx_state = L2_TX_IDLE;
 Layer2RxState l2_rx_state = L2_RX_WAIT_LOW;
+L2_Check_Mode l2_check_mode = CHECK_CRC;
 char l2_tx_buffer;                // Stores the char being sent
-byte l2_rx_temp_nibble;           // Stores the first received nibble
+byte l2_rx_low_nibble  = 0xFF;
+byte l2_rx_high_nibble = 0xFF;
 
 // --- CRC4 Globals ---
 byte crc_poly = 0b00010011;
+byte crc_rx_data = 0;
+byte crc_rx_crc  = 0;
 
 void setup()
 {
@@ -111,7 +127,7 @@ byte hamming_encode(byte data) {
   byte packet = (d4 << 6) | (d3 << 5) | (d2 << 4) | (p4 << 3) | (d1 << 2) | (p2 << 1) | p1;
   
   // flipping to check errors (pakcet, number of bits we want to flip, index1, index2, index3), default 0, -1, -1, -1
-  packet = flip_bits(packet, int 0, int -1, int -1, int -1);
+  packet = flip_bits(packet, NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
 
   return packet;
 }
@@ -120,6 +136,8 @@ byte hamming_encode(byte data) {
 // Input: 7 bit packet
 // Output: 4 bits of corrected data
 byte hamming_decode(byte packet) {
+  Serial.print("hamming_decode IN: ");
+  for (int i = 6; i >= 0; --i) Serial.print((packet >> i) & 1);
   // Extract bits
   byte p1 = (packet >> 0) & 0x01;
   byte p2 = (packet >> 1) & 0x01;
@@ -151,17 +169,43 @@ byte hamming_decode(byte packet) {
     d4 = (packet >> 6) & 0x01;
   }
 
-  return (d4 << 3) | (d3 << 2) | (d2 << 1) | d1;
+  byte nibble = (d4 << 3) | (d3 << 2) | (d2 << 1) | d1;
+
+  Serial.print("  OUT nibble=");
+  for (int i = 3; i >= 0; --i) {
+    Serial.print((nibble >> i) & 1);
+  }
+  Serial.println();
+
+  return nibble;
+}
+
+void Hamming47_tx(char c) {
+  byte low  = c & 0x0F;
+  byte high = (c >> 4) & 0x0F;
+
+  byte code_low  = hamming_encode(low);
+  byte code_high = hamming_encode(high);
+
+  Serial.print("Hamming TX low:  ");
+  for (int i = 6; i >= 0; --i) Serial.print((code_low >> i) & 1);
+  Serial.println();
+
+  Serial.print("Hamming TX high: ");
+  for (int i = 6; i >= 0; --i) Serial.print((code_high >> i) & 1);
+  Serial.println();
+
+  // then push code_low / code_high into Layer 1 via Layer 2 logic
 }
 
 // ==========================================
 //          CRC4 HELPERS
 // ==========================================
 
-byte CRC4_tx() {
-  byte input_data = layer_2_tx_data;  // 8-bit character
-  byte crc = 0x0;                     // 4-bit CRC register
-  byte fb;                            // feedback bit
+// Compute CRC-4 over one byte (x^4 + x + 1)
+byte CRC4_compute(byte input_data) {
+  byte crc = 0x0;  // 4-bit CRC register
+  byte fb;         // feedback bit
 
   // ---- process bit 7 ----
   fb = ((input_data >> 7) & 1) ^ ((crc >> 3) & 1);
@@ -195,24 +239,33 @@ byte CRC4_tx() {
   fb = ((input_data >> 0) & 1) ^ ((crc >> 3) & 1);
   crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
 
-  // keep only 4 bits -> 0000CCCC
-  crc &= 0x0F;
-
-  return crc; // equals 0000CCCC
+  return crc & 0x0F;  // 4-bit CRC
 }
 
-void CRC4_rx(byte rx_data, byte rx_crc)
-{
-  // We temporarily load the received data into the global used by CRC4_tx()
-  layer_2_tx_data = rx_data;
+// For TX: compute CRC for a char AND (optionally) print the 12-bit frame
+byte CRC4_tx(char c) {
+  byte data = (byte)c;
+  byte crc  = CRC4_compute(data);
 
-  // Recompute the CRC using the *same* function
-  byte computed_crc = CRC4_tx();   // only 4-bit result
+  // Print the 12-bit frame (data + crc) as the assignment asks
+  uint16_t frame = (((uint16_t)data) << 4) | crc;
+  Serial.print("CRC4 TX frame for '");
+  Serial.print(c);
+  Serial.print("': ");
+  for (int i = 11; i >= 0; --i) {
+    Serial.print((frame >> i) & 1);
+  }
+  Serial.println();
 
-  // Compare
+  return crc; // lower 4 bits are the CRC
+}
+
+// For RX: check errors and print status
+void CRC4_rx(byte rx_data, byte rx_crc) {
+  byte computed_crc = CRC4_compute(rx_data);
+
   bool ok = (computed_crc == (rx_crc & 0x0F));
 
-  // Print result
   Serial.print("RX char: '");
   Serial.print((char)rx_data);
   Serial.print("'  CRC: ");
@@ -228,6 +281,10 @@ void Layer2_TX(char c) {
   if (l2_tx_state == L2_TX_IDLE) {
     l2_tx_buffer = c;
     l2_tx_state = L2_TX_SEND_LOW;
+
+    if (l2_check_mode == CHECK_HAMMING) {
+      Hamming47_tx(c);   // <-- uses hamming_encode(), so it matches what you send
+    }
   }
 }
 
@@ -241,9 +298,15 @@ void Layer2_TX_Loop() {
       break;
 
     case L2_TX_SEND_LOW:
-      if (!layer_1_tx_busy) { // if layer1 tx is available for another send
-        byte low_nibble = l2_tx_buffer & 0x0F;
-        layer_2_tx_data = hamming_encode(low_nibble);
+      if (!layer_1_tx_busy) {
+        if (l2_check_mode == CHECK_HAMMING) {
+          // your existing code
+          byte low_nibble = l2_tx_buffer & 0x0F;
+          layer_2_tx_data = hamming_encode(low_nibble);
+        } else if (l2_check_mode == CHECK_CRC) {
+          // FIRST byte in CRC: the raw char
+          layer_2_tx_data = (byte)l2_tx_buffer;
+        }
         layer_2_req_tx = true;
         l2_tx_state = L2_TX_WAIT_LOW;
       }
@@ -260,8 +323,15 @@ void Layer2_TX_Loop() {
 
     case L2_TX_SEND_HIGH:
       if (!layer_1_tx_busy) {
-        byte high_nibble = (l2_tx_buffer >> 4) & 0x0F;
-        layer_2_tx_data = hamming_encode(high_nibble);
+        if (l2_check_mode == CHECK_HAMMING) {
+          // your existing code
+          byte high_nibble = (l2_tx_buffer >> 4) & 0x0F;
+          layer_2_tx_data = hamming_encode(high_nibble);
+        } else if (l2_check_mode == CHECK_CRC) {
+          // SECOND byte in CRC: 0000CCCC
+          byte crc = CRC4_tx(l2_tx_buffer); // we'll define this >>>>>>>>>>>>>>>>
+          layer_2_tx_data = crc & 0x0F;  // upper nibble = 0
+        }
         layer_2_req_tx = true;
         l2_tx_state = L2_TX_WAIT_HIGH;
       }
@@ -281,24 +351,59 @@ void Layer2_TX_Loop() {
 // WAIT_LOW is ON => we take the data [l2_rx_temp_nibble = decoded_data] and move to wait high
 // WAIT_HIGH => taking the two nibbles into one word [final_char], printing it and going back to state wait low
 void Layer2_RX_Loop() {
-  if (layer_1_rx_ready) {
-    byte raw_packet = layer_1_rx_data;
-    layer_1_rx_ready = false; // Acknowledge L1
+  if (!layer_1_rx_ready) return;
 
-    byte decoded_data = hamming_decode(raw_packet);
+  byte raw = layer_1_rx_data;
+  layer_1_rx_ready = false;  // Acknowledge L1
+
+  if (l2_check_mode == CHECK_HAMMING) {
+    // ---- Hamming path ----
+    byte decoded_data = hamming_decode(raw);  // 4-bit nibble
 
     if (l2_rx_state == L2_RX_WAIT_LOW) {
-      l2_rx_temp_nibble = decoded_data; // Store lower nibble
+      // First received Hamming codeword → low nibble
+      l2_rx_low_nibble = decoded_data & 0x0F;
+      l2_rx_high_nibble = 0xFF;          // reset high (just for safety)
       l2_rx_state = L2_RX_WAIT_HIGH;
-    } 
-    else if (l2_rx_state == L2_RX_WAIT_HIGH) {
-      char final_char = (decoded_data << 4) | l2_rx_temp_nibble;
-      Serial.print("L2 RX Final: ");
-      Serial.println(final_char);
-      l2_rx_state = L2_RX_WAIT_LOW; // Reset for next char
+
+    } else if (l2_rx_state == L2_RX_WAIT_HIGH) {
+      // Second received Hamming codeword → high nibble
+      l2_rx_high_nibble = decoded_data & 0x0F;
+
+      // Optional sanity check (your 0xFF idea):
+      if (l2_rx_low_nibble == 0xFF) {
+        Serial.println("L2 RX ERROR: high nibble arrived but low nibble is 0xFF!");
+      }
+
+      // Combine high + low into one byte
+      byte final_char = (l2_rx_high_nibble << 4) | l2_rx_low_nibble;
+
+      Serial.print("L2 RX Final (Hamming): ");
+      Serial.print(final_char, BIN);
+      Serial.print("  ->  '");
+      Serial.print((char)final_char);
+      Serial.println("'");
+
+      // Reset buffers to sentinel so we can see if anything weird happens
+      l2_rx_low_nibble  = 0xFF;
+      l2_rx_high_nibble = 0xFF;
+
+      l2_rx_state = L2_RX_WAIT_LOW;
+    }
+  }
+  else if (l2_check_mode == CHECK_CRC) {
+    // ---- CRC path (unchanged) ----
+    if (l2_rx_state == L2_RX_WAIT_LOW) {
+      crc_rx_data = raw;
+      l2_rx_state = L2_RX_WAIT_HIGH;
+    } else {
+      crc_rx_crc = raw & 0x0F;
+      CRC4_rx(crc_rx_data, crc_rx_crc);
+      l2_rx_state = L2_RX_WAIT_LOW;
     }
   }
 }
+
 
 // ==========================================
 //          LAYER 1 (PHYSICAL)
@@ -436,7 +541,7 @@ void Uart_RX() {
 //               MAIN LOOP
 // ==========================================
 
-char data2send[] = "Raziel & Elad";
+char data2send[] = "Elad & Raziel";
 int msg_idx = 0;
 
 void loop()
@@ -453,7 +558,6 @@ void loop()
   if (l2_tx_state == L2_TX_IDLE) {
     char ch = data2send[msg_idx];
 
-<<<<<<< HEAD
     Serial.print("App Sending: ");
     Serial.println(ch);
 
@@ -465,12 +569,3 @@ void loop()
     }
   }
 }
-=======
-      msg_idx++;
-      if (msg_idx >= strlen(msg)) msg_idx = 0; // if finished with message, start over
-      last_app_action = millis();
-    }
-  }
-  // end layer 3 simulation
-}
->>>>>>> 38b9e5bef20e7b004668ad9798808bb51b69b60f
