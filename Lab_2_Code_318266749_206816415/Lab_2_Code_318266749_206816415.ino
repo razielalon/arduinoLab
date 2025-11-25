@@ -379,8 +379,9 @@ void loop()
       Layer2_TX(msg[msg_idx]); // Hand char to Layer 2
 
       msg_idx++;
-      if (msg_idx >= strlen(msg)) msg_idx = 0;
+      if (msg_idx >= strlen(msg)) msg_idx = 0; // if finished with message, start over
       last_app_action = millis();
     }
   }
+  // end layer 3 simulation
 }
