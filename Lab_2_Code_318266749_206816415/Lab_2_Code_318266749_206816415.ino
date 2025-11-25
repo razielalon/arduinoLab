@@ -150,6 +150,9 @@ void Layer2_TX(char c) {
   }
 }
 
+// SEND_LOW/HIGH - makes data for 4 right/left bits [layer_2_tx_data] and switch on request for sending [layer_2_req_tx = true] then state go to waiting to finish [l2_tx_state = L2_TX_WAIT_LOW]
+// WAIT_LOW - only waits for [layer_2_req_tx == false && layer_1_tx_busy == false] - happens in layer 1 in STOP, before moving forward in state, and then go to tranfer the high
+// WAIT_HIGH - same as above, but change state [l2_tx_state = L2_TX_IDLE] and then prints approvment we finished sending a full letter
 void Layer2_TX_Loop() {
   switch (l2_tx_state) {
     case L2_TX_IDLE:
@@ -157,7 +160,7 @@ void Layer2_TX_Loop() {
       break;
 
     case L2_TX_SEND_LOW:
-      if (!layer_1_tx_busy) {
+      if (!layer_1_tx_busy) { // if layer1 tx is available for another send
         byte low_nibble = l2_tx_buffer & 0x0F;
         layer_2_tx_data = hamming_encode(low_nibble);
         layer_2_req_tx = true;
@@ -192,6 +195,10 @@ void Layer2_TX_Loop() {
   }
 }
 
+// works only if [layer_1_rx_ready], if so <<< when is this changed
+// in the beginning we take the global info from rx1 [byte raw_packet = layer_1_rx_data] and then say layer1 'was used' [layer_1_rx_ready = false]
+// WAIT_LOW is ON => we take the data [l2_rx_temp_nibble = decoded_data] and move to wait high
+// WAIT_HIGH => taking the two nibbles into one word [final_char], printing it and going back to state wait low
 void Layer2_RX_Loop() {
   if (layer_1_rx_ready) {
     byte raw_packet = layer_1_rx_data;
@@ -216,6 +223,9 @@ void Layer2_RX_Loop() {
 //          LAYER 1 (PHYSICAL)
 // ==========================================
 
+// In the beginning: we insert a hamm'ed-half-letter [t_letter = layer_2_tx_data]
+// layer 1 busy now [layer_1_tx_busy = true] and we stop asking new info from layer 2 [layer_2_req_tx = false] <<< when to switch this
+//In the end: when we get to stop we say we are not busy in LAYER 1 [layer_1_tx_busy = false]
 void Uart_TX() {
   curr = millis();
   if (TxState == IDLE) {
@@ -266,6 +276,8 @@ void Uart_TX() {
   }
 }
 
+// we collect the bits to a data [layer_1_rx_data]
+// when at STOP we finished and we say layer1 is ready to give layer 2 the info [layer_1_rx_ready = true]
 void Uart_RX() {
   curr_rx = millis();
   rx_bit = digitalRead(RX_pin);
