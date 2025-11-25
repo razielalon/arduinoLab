@@ -453,6 +453,7 @@ void loop()
   if (l2_tx_state == L2_TX_IDLE) {
     char ch = data2send[msg_idx];
 
+<<<<<<< HEAD
     Serial.print("App Sending: ");
     Serial.println(ch);
 
@@ -464,3 +465,12 @@ void loop()
     }
   }
 }
+=======
+      msg_idx++;
+      if (msg_idx >= strlen(msg)) msg_idx = 0; // if finished with message, start over
+      last_app_action = millis();
+    }
+  }
+  // end layer 3 simulation
+}
+>>>>>>> 38b9e5bef20e7b004668ad9798808bb51b69b60f
