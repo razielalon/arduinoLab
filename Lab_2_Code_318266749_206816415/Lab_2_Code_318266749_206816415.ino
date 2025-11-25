@@ -7,12 +7,10 @@
 #define SAMP_NUM 3
 #define DATA_BITS 8
 
-// --- Layer 1 Enums ---
 enum StateType {
   IDLE, START, DATA, PARITY, STOP, ERROR
 };
 
-// --- Layer 2 Enums ---
 enum Layer2TxState {
   L2_TX_IDLE,
   L2_TX_SEND_LOW,
@@ -49,6 +47,9 @@ Layer2RxState l2_rx_state = L2_RX_WAIT_LOW;
 char l2_tx_buffer;                // Stores the char being sent
 byte l2_rx_temp_nibble;           // Stores the first received nibble
 
+// --- CRC4 Globals ---
+byte crc_poly = 0b00010011;
+
 void setup()
 {
   Serial.begin(BAUD_RATE);
@@ -72,6 +73,18 @@ void setup()
 // ==========================================
 //          HAMMING CODE HELPERS
 // ==========================================
+
+// flipping bits function for testing errors
+byte flip_bits(byte packet, int n, int b1 = -1, int b2 = -1, int b3 = -1) {
+  // n = number of bits to flip
+  // b1,b2,b3 = bit positions (0 = LSB ... 7 = MSB)
+
+  if (n >= 1 && b1 >= 0) packet ^= (1 << b1);
+  if (n >= 2 && b2 >= 0) packet ^= (1 << b2);
+  if (n >= 3 && b3 >= 0) packet ^= (1 << b3);
+
+  return packet;
+}
 
 // Hamming (7,4) Encoding
 // Input: 4 bits of data (in the lower 4 bits of the byte)
@@ -97,6 +110,9 @@ byte hamming_encode(byte data) {
   // Bit positions:          7  6  5  4  3  2  1
   byte packet = (d4 << 6) | (d3 << 5) | (d2 << 4) | (p4 << 3) | (d1 << 2) | (p2 << 1) | p1;
   
+  // flipping to check errors (pakcet, number of bits we want to flip, index1, index2, index3), default 0, -1, -1, -1
+  packet = flip_bits(packet, int 0, int -1, int -1, int -1);
+
   return packet;
 }
 
@@ -136,6 +152,71 @@ byte hamming_decode(byte packet) {
   }
 
   return (d4 << 3) | (d3 << 2) | (d2 << 1) | d1;
+}
+
+// ==========================================
+//          CRC4 HELPERS
+// ==========================================
+
+byte CRC4_tx() {
+  byte input_data = layer_2_tx_data;  // 8-bit character
+  byte crc = 0x0;                     // 4-bit CRC register
+  byte fb;                            // feedback bit
+
+  // ---- process bit 7 ----
+  fb = ((input_data >> 7) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 6 ----
+  fb = ((input_data >> 6) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 5 ----
+  fb = ((input_data >> 5) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 4 ----
+  fb = ((input_data >> 4) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 3 ----
+  fb = ((input_data >> 3) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 2 ----
+  fb = ((input_data >> 2) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 1 ----
+  fb = ((input_data >> 1) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // ---- process bit 0 ----
+  fb = ((input_data >> 0) & 1) ^ ((crc >> 3) & 1);
+  crc = ((crc << 1) & 0x0F) ^ (fb ? (crc_poly & 0x0F) : 0);
+
+  // keep only 4 bits -> 0000CCCC
+  crc &= 0x0F;
+
+  return crc; // equals 0000CCCC
+}
+
+void CRC4_rx(byte rx_data, byte rx_crc)
+{
+  // We temporarily load the received data into the global used by CRC4_tx()
+  layer_2_tx_data = rx_data;
+
+  // Recompute the CRC using the *same* function
+  byte computed_crc = CRC4_tx();   // only 4-bit result
+
+  // Compare
+  bool ok = (computed_crc == (rx_crc & 0x0F));
+
+  // Print result
+  Serial.print("RX char: '");
+  Serial.print((char)rx_data);
+  Serial.print("'  CRC: ");
+  Serial.println(ok ? "SUCCESS" : "FAIL");
 }
 
 // ==========================================
@@ -355,32 +436,31 @@ void Uart_RX() {
 //               MAIN LOOP
 // ==========================================
 
-char msg[] = "RAZIEL\n";
+char data2send[] = "Raziel & Elad";
 int msg_idx = 0;
-unsigned long last_app_action = 0;
 
 void loop()
 {
-  // 1. Run Layer 1 Drivers (Physical)
+  // 1. Physical Layer
   Uart_TX();
   Uart_RX();
 
-  // 2. Run Layer 2 Logic (Data Link / Error Correction)
+  // 2. Data Link Layer
   Layer2_TX_Loop();
   Layer2_RX_Loop();
 
-  // 3. Application Simulation (User typing a message)
-  if (millis() - last_app_action > 3000) {
-    // Only send if Layer 2 is Idle (ready for a new FULL char)
-    if (l2_tx_state == L2_TX_IDLE) {
-      Serial.print("App Sending: ");
-      Serial.println(msg[msg_idx]);
-      
-      Layer2_TX(msg[msg_idx]); // Hand char to Layer 2
+  // 3. Application Layer (send next char immediately when possible)
+  if (l2_tx_state == L2_TX_IDLE) {
+    char ch = data2send[msg_idx];
 
-      msg_idx++;
-      if (msg_idx >= strlen(msg)) msg_idx = 0;
-      last_app_action = millis();
+    Serial.print("App Sending: ");
+    Serial.println(ch);
+
+    Layer2_TX(ch);     // Give to Layer 2
+
+    msg_idx++;
+    if (msg_idx >= strlen(data2send)) {
+      msg_idx = 0;     // restart the message
     }
   }
 }
