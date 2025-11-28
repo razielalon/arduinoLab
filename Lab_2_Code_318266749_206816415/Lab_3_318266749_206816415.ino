@@ -300,9 +300,9 @@ byte CRC4_tx(char c) {
 }
 
 void CRC4_rx(byte rx_data, byte rx_crc) {
-  byte computed_crc = CRC4_compute(rx_data);
+  byte computed_crc = CRC4_compute(rx_data); // compute CRC on received data
 
-  bool ok = (computed_crc == (rx_crc & 0x0F));
+  bool ok = (computed_crc == (rx_crc & 0x0F)); // compare only lower 4 bits
 
   Serial.print("RX char: '");
   Serial.print((char)rx_data);
@@ -383,71 +383,81 @@ void layer2_tx() {
     return;  // finished Hamming branch
   }
 
-  // ---- CRC-4 state ----
+  // ==========================================
+  //            CRC MODE (FIXED)
+  // ==========================================
   if (L2Mode == CHECK_CRC) {
-    // Small FSM: send data first, then crc
-    static bool sending_crc = false;
-    static char current_char = 0;
-    static byte current_crc  = 0;
+    
+    // We reuse the L2TxState enum but with different meanings:
+    // L2_TX_IDLE      -> Prepare and send DATA
+    // L2_TX_WAIT_LOW  -> Wait for DATA to finish, then send CRC
+    // L2_TX_WAIT_HIGH -> Wait for CRC to finish, then sleep
+    static byte current_crc  = 0; // store current CRC for sending after data
+    switch (L2TxState) {
 
-    // If just finished sending previous byte
-    if (l1_busy_falling_edge) { // layer 1 finished sending in this iteration exactly
-      if (sending_crc) {
-        Serial.print("sending crc if on layer 2 tx entered");
-        // Finished crc -> move to next char with delay
-        sending_crc   = false;
-        l2_data_idx++;
-        if (data2send[l2_data_idx] == '\0') {
-          l2_data_idx = 0;
+      // --- PREPARE AND SEND DATA ---
+      case L2_TX_IDLE:
+        if (now < next_char_time) return; // Wait for delay
+
+        if (!layer_1_tx_busy && !layer_2_tx_request) { // Layer 1 is free to send new char, and no pending request from layer 2
+          char c = data2send[l2_data_idx]; // load next char to send
+          if (c == '\0') {     // if last char reached, restart from beginning
+            l2_data_idx = 0;
+            c = data2send[0];
+          }
+
+          // Compute CRC on clean data
+          current_crc = CRC4_compute((byte)c);
+
+          // Debug Print
+          Serial.print("CRC4 TX frame for '");
+          Serial.print(c);
+          Serial.print("': ");
+          uint16_t frame = (((uint16_t)c) << 4) | (current_crc & 0x0F);
+          for (int i = 11; i >= 0; --i) Serial.print((frame >> i) & 1);
+          Serial.println();
+
+          // Inject Error into DATA
+          byte noisy_data = flip_bits((byte)c, NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
+
+          // Send DATA
+          l1_tx_buffer       = noisy_data;
+          layer_2_tx_request = true; // request Layer 1 to send
+          
+          // Move to state waiting for data to finish
+          L2TxState = L2_TX_WAIT_LOW; 
         }
-        next_char_time = now + random(500, 2000);
-      }
-    }
+        break;
 
-    // If not time yet to send next char
-    if (now < next_char_time) {
-      return;
-    }
+      // --- WAIT FOR DATA TO FINISH, THEN SEND CRC ---
+      case L2_TX_WAIT_LOW:
+        if (l1_busy_falling_edge) { // Data just finished sending
+           if (!layer_1_tx_busy && !layer_2_tx_request) { // Layer 1 is free to send new char, and no pending request from layer 2
 
-    // Layer 1 is free to send new char?
-    if (!layer_1_tx_busy && !layer_2_tx_request) {
-
-      if (!sending_crc) {
-        // Step 1: Send the data byte
-        current_char = data2send[l2_data_idx];
-        if (current_char == '\0') {
-          l2_data_idx = 0;
-          current_char = data2send[0];
+             // Send the stored CRC
+             l1_tx_buffer       = current_crc; // put CRC in Layer 1 tx buffer
+             layer_2_tx_request = true;
+             
+             // Move to state waiting for CRC to finish
+             L2TxState = L2_TX_WAIT_HIGH;
+           }
         }
+        break;
 
-        current_crc = CRC4_compute((byte)current_char);
-
-        // prints the 12 bits frame (data + crc)
-        Serial.print("CRC4 TX frame for '");
-        Serial.print(current_char);
-        Serial.print("': ");
-        uint16_t frame = (((uint16_t)current_char) << 4) | (current_crc & 0x0F);
-        for (int i = 11; i >= 0; --i) {
-          Serial.print((frame >> i) & 1);
+      // --- WAIT FOR CRC TO FINISH, THEN CLEANUP ---
+      case L2_TX_WAIT_HIGH:
+        if (l1_busy_falling_edge) { // CRC just finished sending
+          // Done with this char
+          l2_data_idx++;
+          if (data2send[l2_data_idx] == '\0') { // if last char reached, restart from beginning
+            l2_data_idx = 0;
+          }
+          next_char_time = now + random(500, 2000);
+          
+          // Go back to IDLE
+          L2TxState = L2_TX_IDLE;
         }
-        Serial.println();
-
-        // inject errors into data byte only
-        byte noisy_data = flip_bits((byte)current_char,
-                                    NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
-
-        l1_tx_buffer       = noisy_data;
-        layer_2_tx_request = true;
-        sending_crc        = true;    // next time send crc
-        // sending_crc will remain true until crc is sent after data
-      }
-      else {
-        // Step 2: Send the CRC itself
-        byte noisy_crc = current_crc; // if you want, you can add a separate flip_bits here too
-        l1_tx_buffer       = noisy_crc;
-        layer_2_tx_request = true;
-        // sending_crc ייהפך ל-false אחרי נפילת busy למעלה
-      }
+        break;
     }
   }
 }
@@ -490,17 +500,18 @@ void layer2_rx() {
 
   // ---- CRC-4 ----
   if (L2Mode == CHECK_CRC) {
+    // static so it will be saved between loops
     static bool waiting_crc = false;
     static byte rx_data_tmp = 0;
 
     if (!waiting_crc) {
-      // זה ה-data byte
-      rx_data_tmp  = code;
+      // it's the data byte
+      rx_data_tmp  = code; // store data temporarily
       waiting_crc  = true;
     } else {
-      // זה ה-CRC byte
-      byte rx_crc = code;
-      CRC4_rx(rx_data_tmp, rx_crc);
+      // it's the CRC byte
+      byte rx_crc = code;  // store CRC temporarily
+      CRC4_rx(rx_data_tmp, rx_crc); // process received data + crc
       waiting_crc = false;
     }
   }
@@ -702,8 +713,6 @@ void layer1_rx()
 
 void loop()
 {
-  //samp_idx = 0;
-  //samp_reg = 0;
   layer2_tx();
   layer2_rx();
   layer1_tx();
