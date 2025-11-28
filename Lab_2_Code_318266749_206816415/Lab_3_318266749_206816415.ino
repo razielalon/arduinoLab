@@ -653,7 +653,7 @@ void layer1_rx()
               RxState = ERROR; 
               start_punish_time = curr_rx;
               l1_rx_buffer = char_reg; // still pass the received char to layer 2 (it will detect error from data)
-              punish_time = BIT_TIME * (DATA_BITS + 3); // time of (char + start + stop + parity) bits
+              punish_time = BIT_TIME * 2; // * (DATA_BITS + 3) was earlier
             }
           }
 
@@ -679,7 +679,7 @@ void layer1_rx()
             RxState = ERROR;
             start_punish_time = curr_rx;
             l1_rx_buffer = char_reg; // still pass the received char to layer 2 (it will detect error from data)
-            punish_time = BIT_TIME; //  * (DATA_BITS + 3) was earlier
+            punish_time = BIT_TIME; //  
           }
         }
 
