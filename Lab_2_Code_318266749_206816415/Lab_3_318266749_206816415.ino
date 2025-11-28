@@ -59,7 +59,7 @@ StateType TxState, RxState;
 // ========================================
 Layer2TxState L2TxState;
 Layer2RxState L2RxState;
-L2_Check_Mode L2Mode = CHECK_CRC;
+L2_Check_Mode L2Mode = CHECK_HAMMING;
 
 int l2_data_idx = 0;
 
@@ -96,7 +96,7 @@ void setup()
   RxState = IDLE;
   L2TxState = L2_TX_IDLE;
   L2RxState = L2_RX_WAIT_LOW;
-  L2Mode    = CHECK_CRC;
+  L2Mode    = CHECK_HAMMING;
 
   randomSeed(analogRead(A0));
 
@@ -512,44 +512,47 @@ void layer1_tx()
   curr = millis();
 
   if (TxState == IDLE) {
-    if (layer_2_tx_request) {
-      if (!layer_1_tx_busy){
+    if (layer_2_tx_request) { // only start new transmission if layer 2 requested
+      if (!layer_1_tx_busy){ // layer 1 is not busy
+        // reset parameters for new transmission
         layer_1_tx_busy    = true;
         layer_2_tx_request = false;
 
-        t_letter   = l1_tx_buffer;
-        tx_bit_idx = 0;
+        t_letter   = l1_tx_buffer; // get letter to send from layer 2
+        tx_bit_idx = 0; // reset bit index
 
         start_time = curr;
         TxState    = START;
-        digitalWrite(TX_pin, 0);        // start bit
+        digitalWrite(TX_pin, 0);        // send start bit on physical wire
       }
-    } else {
+    } else { // if no request from layer 2, just return
       return;
     }
   }
 
-  // הגענו לכאן אם כבר התחלנו שידור (START / DATA / PARITY / STOP)
-  if ((curr - start_time) >= BIT_TIME) {
+  // reaches here only if not IDLE - meaning a transmission is ongoing
+  if ((curr - start_time) >= BIT_TIME) { // wait BIT_TIME before sending next bit
     start_time = curr;
 
+    //------ start layer 1 transmission state machine ------
     if (TxState == START) {
       TxState = DATA;
 
-      bit = bitRead(t_letter, tx_bit_idx);
-      digitalWrite(TX_pin, bit);
+      bit = bitRead(t_letter, tx_bit_idx); // get first data bit
+      digitalWrite(TX_pin, bit); // send first data bit
     }
 
     else if (TxState == DATA) {
-      tx_bit_idx++;
+      tx_bit_idx++; // move to next data bit
 
-      if (tx_bit_idx < DATA_BITS) {
-        bit = bitRead(t_letter, tx_bit_idx);
-        digitalWrite(TX_pin, bit);
+      if (tx_bit_idx < DATA_BITS) { // still data bits to send
+        bit = bitRead(t_letter, tx_bit_idx); // get next data bit
+        digitalWrite(TX_pin, bit);  // send next data bit
       }
-      else {
+      else { // all data bits sent, move to PARITY state
         TxState = PARITY;
 
+        // calculate parity bit
         ones = 0;
         for (i = 0; i < DATA_BITS; i++) {
           if (bitRead(t_letter, i)) {
@@ -558,34 +561,35 @@ void layer1_tx()
         }
 
         parity = (ones % 2 == 0) ? 1 : 0;
-        digitalWrite(TX_pin, parity);
+        digitalWrite(TX_pin, parity); // send parity bit
       }
     }
 
-    else if (TxState == PARITY) {
+    else if (TxState == PARITY) { // PARITY already sent, now send STOP bit
       TxState = STOP;
       digitalWrite(TX_pin, 1);  // stop bit
     }
 
     else if (TxState == STOP) {
       TxState = IDLE;
-      digitalWrite(TX_pin, 1);  // קו חופשי
+      digitalWrite(TX_pin, 1);  // idle state on wire - stays on logic 1
 
-      layer_1_tx_busy = false;  // לשכבה 2 מותר לבקש תו חדש
+      layer_1_tx_busy = false;  // transmission finished - layer 1 not busy anymore, layer 2 can request new transmission
     }
   }
 }
 
 void layer1_rx()
 {
+  // polling RX pin at every loop
   curr_rx = millis();
   rx_bit = digitalRead(RX_pin);
 
   if (RxState == IDLE) { // got 0, enter START state
     if (rx_bit == 0){
       RxState = START;
-      layer_1_rx_busy = true;
-      layer_1_rx_got_char = false;
+      layer_1_rx_busy = true; // set busy flag
+      layer_1_rx_got_char = false; // reset got_char flag - will be set to true only if char received correctly and fully
       prev_samp_time = curr_rx;
       samp_idx = 0;
     }
@@ -593,7 +597,7 @@ void layer1_rx()
 
   else { // not on IDLE, need to sample
 
-    if ((RxState != IDLE) && (RxState != ERROR) && (curr_rx - prev_samp_time >= del)) {
+    if ((RxState != IDLE) && (RxState != ERROR) && (curr_rx - prev_samp_time >= del)) { // time to sample again
 		
       bitWrite(samp_reg, samp_idx, digitalRead(RX_pin)); // write to the samp register(holds 5 samples)
 
