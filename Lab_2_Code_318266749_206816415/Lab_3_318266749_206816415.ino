@@ -132,11 +132,13 @@ byte flip_bits(byte packet, int n, int b1 = -1, int b2 = -1, int b3 = -1) {
 //          HAMMING CODE HELPERS
 // ==========================================
 byte hamming_decode(byte packet) {
+  
+  // print input packet - for debug
   Serial.print("hamming_decode IN: ");
   for (int i = 6; i >= 0; --i) Serial.print((packet >> i) & 1);
   Serial.println();
 
-  // Extract bits
+  // Extract all bits from the received packet
   byte p1 = (packet >> 0) & 0x01;
   byte p2 = (packet >> 1) & 0x01;
   byte d1 = (packet >> 2) & 0x01;
@@ -150,15 +152,16 @@ byte hamming_decode(byte packet) {
   byte s2 = p2 ^ d1 ^ d3 ^ d4; // Check pos 2,3,6,7
   byte s4 = p4 ^ d2 ^ d3 ^ d4; // Check pos 4,5,6,7
 
-  byte error_pos = (s4 << 2) | (s2 << 1) | s1;
+  byte error_pos = (s4 << 2) | (s2 << 1) | s1; // calculating the error position (1-based index) - calculated binary and that why its a byte type
 
   if (error_pos != 0) {
-    Serial.print("  Correction! Error at bit: ");
+    Serial.print("  Correction! Error at bit: (1-indexed) ");
     Serial.println(error_pos);
 
     // Flip the bit at error_pos (1-based index)
     packet ^= (1 << (error_pos - 1));
 
+    // print corrected packet - for debug
     Serial.print("  Corrected code: ");
     for (int i = 6; i >= 0; --i) Serial.print((packet >> i) & 1);
     Serial.println();
@@ -173,8 +176,9 @@ byte hamming_decode(byte packet) {
     d4 = (packet >> 6) & 0x01;
   }
 
-  byte nibble = (d4 << 3) | (d3 << 2) | (d2 << 1) | d1;
+  byte nibble = (d4 << 3) | (d3 << 2) | (d2 << 1) | d1; // return data bits only (4 low bits)
 
+  // print output nibble - for debug
   Serial.print("  OUT nibble = ");
   for (int i = 3; i >= 0; --i) Serial.print((nibble >> i) & 1);
   Serial.println();
@@ -211,7 +215,7 @@ byte hamming_encode(byte nibble) {
 void Hamming47_rx(byte rx_code_low, byte rx_code_high) {
   Serial.println("===== Hamming47_rx =====");
 
-  // הדפסה של מה שקיבלנו (7 ביט כל אחד)
+  // --- Debug Printing (Raw Data) ---
   Serial.print("RX low  (raw): ");
   for (int i = 6; i >= 0; --i) Serial.print((rx_code_low >> i) & 1);
   Serial.println();
@@ -220,14 +224,14 @@ void Hamming47_rx(byte rx_code_low, byte rx_code_high) {
   for (int i = 6; i >= 0; --i) Serial.print((rx_code_high >> i) & 1);
   Serial.println();
 
-  // שימוש ב-hamming_decode לכל ניבל
+  // --- Correction  ---
   Serial.println("Decoding low nibble:");
   byte low_nibble  = hamming_decode(rx_code_low);
 
   Serial.println("Decoding high nibble:");
   byte high_nibble = hamming_decode(rx_code_high);
 
-  // הרכבת האות מחדש
+  // --- Reconstruction ---
   char reconstructed = (char)((high_nibble << 4) | (low_nibble & 0x0F));
 
   Serial.print("Reconstructed char: '");
