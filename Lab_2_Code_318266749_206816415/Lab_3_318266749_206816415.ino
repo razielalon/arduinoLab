@@ -182,68 +182,31 @@ byte hamming_decode(byte packet) {
   return nibble;
 }
 
-// קידוד Hamming (7,4,3)
-// nibble = 4 ביט (d4 d3 d2 d1) = ביטים 3..0
-// קידוד למבנה: [p1 p2 d1 p4 d2 d3 d4] = ביטים 0..6
+// Hamming (7,4,3)
 byte hamming_encode(byte nibble) {
+  // takes 4-bit nibble, returns 7-bit Hamming code
   byte d1 = (nibble >> 0) & 0x01;
   byte d2 = (nibble >> 1) & 0x01;
   byte d3 = (nibble >> 2) & 0x01;
   byte d4 = (nibble >> 3) & 0x01;
 
-  byte p1 = d1 ^ d2 ^ d4;   // מכסה עמדות 1,3,5,7
-  byte p2 = d1 ^ d3 ^ d4;   // מכסה עמדות 2,3,6,7
-  byte p4 = d2 ^ d3 ^ d4;   // מכסה עמדות 4,5,6,7
+  byte p1 = d1 ^ d2 ^ d4;   
+  byte p2 = d1 ^ d3 ^ d4;   
+  byte p4 = d2 ^ d3 ^ d4;   
 
+  // Assemble the 7-bit packet
   byte code = 0;
-  code |= (p1 << 0);  // bit 0
-  code |= (p2 << 1);  // bit 1
-  code |= (d1 << 2);  // bit 2
-  code |= (p4 << 3);  // bit 3
-  code |= (d2 << 4);  // bit 4
-  code |= (d3 << 5);  // bit 5
-  code |= (d4 << 6);  // bit 6
+  code |= (p1 << 0);  // Put p1 at bit 0
+  code |= (p2 << 1);  // Put p2 at bit 1
+  code |= (d1 << 2);  // Put d1 at bit 2
+  code |= (p4 << 3);  // Put p4 at bit 3
+  code |= (d2 << 4);  // Put d2 at bit 4
+  code |= (d3 << 5);  // Put d3 at bit 5
+  code |= (d4 << 6);  // Put d4 at bit 6
 
-  return code; // 7 ביט בשימוש (0..6)
+  return code; // 7 bits set (0..6) , 8th bit is 0
 }
 
-void Hamming47_tx(char c) {
-  byte low  = c & 0x0F;
-  byte high = (c >> 4) & 0x0F;
-
-  byte code_low  = hamming_encode(low);
-  byte code_high = hamming_encode(high);
-
-  Serial.println("===== Hamming47_tx =====");
-  Serial.print("Original char: '");
-  Serial.print(c);
-  Serial.println("'");
-
-  // 1) הדפסת המילים לפני הכנסת טעויות
-  Serial.print("TX low  (orig): ");
-  for (int i = 6; i >= 0; --i) Serial.print((code_low >> i) & 1);
-  Serial.println();
-
-  Serial.print("TX high (orig): ");
-  for (int i = 6; i >= 0; --i) Serial.print((code_high >> i) & 1);
-  Serial.println();
-
-  // 2) הכנסת טעויות לפי NUM_ERR_BITS ו-ERR_BIT_1..3
-  byte noisy_low  = flip_bits(code_low,  NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
-  byte noisy_high = flip_bits(code_high, NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
-
-  Serial.print("TX low  (noisy): ");
-  for (int i = 6; i >= 0; --i) Serial.print((noisy_low >> i) & 1);
-  Serial.println();
-
-  Serial.print("TX high (noisy): ");
-  for (int i = 6; i >= 0; --i) Serial.print((noisy_high >> i) & 1);
-  Serial.println();
-
-  // בשלב הזה, ב"עולם האמיתי", היית שולח noisy_low ואז noisy_high דרך שכבה 1.
-  // כרגע, בשביל בדיקות לוגיות, נקרא ישירות ל-RX:
-  Hamming47_rx(noisy_low, noisy_high);
-}
 
 void Hamming47_rx(byte rx_code_low, byte rx_code_high) {
   Serial.println("===== Hamming47_rx =====");
@@ -483,34 +446,36 @@ void layer2_tx() {
   }
 }
 
-void layer2_rx() {
+void layer2_rx() { 
+  // static so it will be saved between loops
   static bool prev_l1_rx_busy = false;
 
   bool curr_l1_rx_busy = layer_1_rx_busy;
-  bool falling_edge    = (prev_l1_rx_busy && !curr_l1_rx_busy);
+  bool falling_edge    = (prev_l1_rx_busy && !curr_l1_rx_busy); // last iteration busy, now not busy
   prev_l1_rx_busy      = curr_l1_rx_busy;
 
-  if (!falling_edge) return;
+  if (!falling_edge) return; // only proceed on falling edge of layer rx 1 busy
 
   if (!layer_1_rx_got_char) {
-    // מעבר מ-ERROR ל-IDLE, לא תו אמיתי
+    // if layer 1 detects error on start/parity/stop bits, it won't set got_char flag
     return;
   }
 
-  layer_1_rx_got_char = false;
-  byte code = l1_rx_buffer;
+  layer_1_rx_got_char = false;  // reset flag for next char
+  byte code = l1_rx_buffer; // get received byte from layer 1
 
-  // ---- Hamming ----
+  // ---- Hamming State ----
   if (L2Mode == CHECK_HAMMING) {
     switch (L2RxState) {
-      case L2_RX_WAIT_LOW:
-        rx_code_low = code;
+      case L2_RX_WAIT_LOW: // waiting for low nibble
+        rx_code_low = code; // store low nibble (coded)
         L2RxState   = L2_RX_WAIT_HIGH;
         break;
 
-      case L2_RX_WAIT_HIGH:
-        rx_code_high = code;
-        Hamming47_rx(rx_code_low, rx_code_high);
+      case L2_RX_WAIT_HIGH: // waiting for high nibble
+        rx_code_high = code; // store high nibble (coded)
+        
+        Hamming47_rx(rx_code_low, rx_code_high); // now have both low and high nibbles, proceed to decode
         L2RxState = L2_RX_WAIT_LOW;
         break;
     }
@@ -657,7 +622,7 @@ void layer1_rx()
         
         else if (RxState == DATA) { // handling DATA state sampling (reading a letter -one bit at a time)
 
-          //calculating majority for each bit in idx
+          // calculating majority for each bit in idx
           int mid_sum = bitRead(samp_reg,1) + bitRead(samp_reg,2) + bitRead(samp_reg,3);
           majority = (mid_sum >= 2) ? 1 : 0;
 
