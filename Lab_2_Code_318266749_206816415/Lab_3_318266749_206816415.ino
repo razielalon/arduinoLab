@@ -643,15 +643,16 @@ void layer1_rx()
             rx_bit_idx++; 
           }
 
-          else { // ended cahracter, getting parity
+          else { // ended character, getting parity
             r_parity = majority;
             if ((t_ones % 2) != r_parity) { // if parity good
               RxState = STOP;
             }
             else { // if parity bad
               Serial.println("RX: ERROR - bad parity");
-              //RxState = ERROR; - removed this parity check - happens in layer 2 now
-              start_punish_time = curr;
+              RxState = ERROR; 
+              start_punish_time = curr_rx;
+              l1_rx_buffer = char_reg; // still pass the received char to layer 2 (it will detect error from data)
               punish_time = BIT_TIME * (DATA_BITS + 3); // time of (char + start + stop + parity) bits
             }
           }
@@ -659,7 +660,6 @@ void layer1_rx()
           samp_idx = 0;
         }
 
-    
         else if (RxState == STOP) { // handling STOP state
 
           int mid_sum = bitRead(samp_reg,1) + bitRead(samp_reg,2) + bitRead(samp_reg,3);
@@ -678,7 +678,8 @@ void layer1_rx()
             Serial.println("RX: ERROR - bad STOP bit");
             RxState = ERROR;
             start_punish_time = curr_rx;
-            punish_time = BIT_TIME * (DATA_BITS + 3);
+            l1_rx_buffer = char_reg; // still pass the received char to layer 2 (it will detect error from data)
+            punish_time = BIT_TIME; //  * (DATA_BITS + 3) was earlier
           }
         }
 
@@ -689,8 +690,11 @@ void layer1_rx()
   if ((RxState == ERROR) && (curr_rx - start_punish_time >= punish_time)) {
     RxState = IDLE;
     layer_1_rx_busy = false;
-    layer_1_rx_got_char = false;
+    layer_1_rx_got_char = true; // to allow layer 2 to proceed (it will detect error from data)
     Serial.println("RX: leaving ERROR, back to IDLE");
+    char_reg = 0x00;
+    samp_reg = 0x00;
+    samp_idx = 0;
   }
 }
 
