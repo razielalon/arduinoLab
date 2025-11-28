@@ -650,7 +650,7 @@ void layer1_rx()
             }
             else { // if parity bad
               Serial.println("RX: ERROR - bad parity");
-              RxState = ERROR;
+              //RxState = ERROR; - removed this parity check - happens in layer 2 now
               start_punish_time = curr;
               punish_time = BIT_TIME * (DATA_BITS + 3); // time of (char + start + stop + parity) bits
             }
@@ -696,8 +696,8 @@ void layer1_rx()
 
 void loop()
 {
-  samp_idx = 0;
-  samp_reg = 0;
+  //samp_idx = 0;
+  //samp_reg = 0;
   layer2_tx();
   layer2_rx();
   layer1_tx();
