@@ -347,82 +347,86 @@ void CRC4_rx(byte rx_data, byte rx_crc) {
 //          LAYER 2 FUNCTIONS
 // ==========================================
 void layer2_tx() {
-  static unsigned long next_char_time = 0;
+  // static so it will be saved between loops
+  static unsigned long next_char_time = 0; 
   static bool prev_l1_busy = false;
 
   unsigned long now = millis();
-  bool curr_l1_busy = layer_1_tx_busy;
+  bool curr_l1_busy = layer_1_tx_busy; // in each iteration, get the current busy status
 
-  // נפילת busy של שכבה 1 = תו פיזי הסתיים
-  bool l1_busy_falling_edge = (prev_l1_busy && !curr_l1_busy);
-  prev_l1_busy = curr_l1_busy;
+  // detect falling edge of layer 1 busy
+  bool l1_busy_falling_edge = (prev_l1_busy && !curr_l1_busy); // was busy last iteration, now not busy
+  prev_l1_busy = curr_l1_busy; // afeter checking and setting l1_busy_falling_edge, update prev_l1_busy for next iteration
 
-  // ---- מצב Hamming (כמו שיש לך היום) ----
+  // ---- Hamming state ----
   if (L2Mode == CHECK_HAMMING) {
 
     switch (L2TxState) {
 
       case L2_TX_IDLE:
-        if (now < next_char_time) return;
+        if (now < next_char_time) return; // not time yet to send next char (some random delay between chars)
 
-        if (!layer_1_tx_busy && !layer_2_tx_request) {
-          char c = data2send[l2_data_idx];
-          if (c == '\0') {       // סוף מחרוזת -> להתחלה
+        if (!layer_1_tx_busy && !layer_2_tx_request) { // layer 1 is free to send new char, and no pending request from layer 2
+          char c = data2send[l2_data_idx]; // load next char to send
+          if (c == '\0') {       // if last char reached, restart from beginning
             l2_data_idx = 0;
             c = data2send[0];
           }
 
-          byte low  = c & 0x0F;
-          byte high = (c >> 4) & 0x0F;
+          byte low  = c & 0x0F; // extract low nibble
+          byte high = (c >> 4) & 0x0F; // extract high nibble
 
+          // encode both nibbles using Hamming (7,4)
           tx_code_low  = hamming_encode(low);
           tx_code_high = hamming_encode(high);
 
+          // inject errors according to NUM_ERR_BITS and ERR_BIT_1..3
           tx_code_low  = flip_bits(tx_code_low,  NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
           tx_code_high = flip_bits(tx_code_high, NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
 
-          l1_tx_buffer       = tx_code_low;
-          layer_2_tx_request = true;
+          // start sending low nibble first
+          l1_tx_buffer       = tx_code_low; // put data in layer 1 tx buffer
+          layer_2_tx_request = true; // request layer 1 to send
 
-          L2TxState = L2_TX_WAIT_LOW;
+          L2TxState = L2_TX_WAIT_LOW; // state L2_TX_IDLE -> L2_TX_WAIT_LOW
         }
         break;
 
       case L2_TX_WAIT_LOW:
-        if (l1_busy_falling_edge) {
-          if (!layer_1_tx_busy && !layer_2_tx_request) {
-            l1_tx_buffer       = tx_code_high;
-            layer_2_tx_request = true;
-            L2TxState          = L2_TX_WAIT_HIGH;
+        if (l1_busy_falling_edge) { // layer 1 finished sending low nibble in this iteration exactly
+          if (!layer_1_tx_busy && !layer_2_tx_request) { // layer 1 is free to send new char, and no pending request from layer 2
+            l1_tx_buffer       = tx_code_high; // put high nibble data in layer 1 tx buffer
+            layer_2_tx_request = true; // request layer 1 to send
+            L2TxState          = L2_TX_WAIT_HIGH; // state L2_TX_WAIT_LOW -> L2_TX_WAIT_HIGH
           }
         }
         break;
 
       case L2_TX_WAIT_HIGH:
-        if (l1_busy_falling_edge) {
-          l2_data_idx++;
-          if (data2send[l2_data_idx] == '\0') {
+        if (l1_busy_falling_edge) { // layer 1 finished sending high nibble in this iteration exactly
+          l2_data_idx++; // move to next char to send
+          if (data2send[l2_data_idx] == '\0') { // if last char reached, restart from beginning
             l2_data_idx = 0;
           }
-          next_char_time = now + random(500, 2000);
-          L2TxState      = L2_TX_IDLE;
+          next_char_time = now + random(500, 2000); // set random delay before sending next char
+          L2TxState      = L2_TX_IDLE; // state L2_TX_WAIT_HIGH -> L2_TX_IDLE
         }
         break;
     }
-    return;  // סיימנו את ענף ההמינג
+    return;  // finished Hamming branch
   }
 
-  // ---- מצב CRC-4 ----
+  // ---- CRC-4 state ----
   if (L2Mode == CHECK_CRC) {
-    // FSM קטן: שולחים קודם data ואז crc
+    // Small FSM: send data first, then crc
     static bool sending_crc = false;
     static char current_char = 0;
     static byte current_crc  = 0;
 
-    // אם בדיוק סיימנו לשלוח בייט קודם
+    // If just finished sending previous byte
     if (l1_busy_falling_edge) {
       if (sending_crc) {
-        // סיימנו crc -> עוברים לאות הבא עם דיליי
+        // Finished crc -> move to next char with delay
         sending_crc   = false;
         l2_data_idx++;
         if (data2send[l2_data_idx] == '\0') {
@@ -432,16 +436,16 @@ void layer2_tx() {
       }
     }
 
-    // אם עדיין לא הגיע זמן לשלוח את הבא
+    // If not time yet to send next char
     if (now < next_char_time) {
       return;
     }
 
-    // שכבה 1 פנויה לשליחה חדשה?
+    // Layer 1 is free to send new char?
     if (!layer_1_tx_busy && !layer_2_tx_request) {
 
       if (!sending_crc) {
-        // שלב 1: שולחים את ה-data byte
+        // Step 1: Send the data byte
         current_char = data2send[l2_data_idx];
         if (current_char == '\0') {
           l2_data_idx = 0;
