@@ -96,7 +96,7 @@ void setup()
   RxState = IDLE;
   L2TxState = L2_TX_IDLE;
   L2RxState = L2_RX_WAIT_LOW;
-  L2Mode    = CHECK_HAMMING;
+  L2Mode    = CHECK_CRC;
 
   randomSeed(analogRead(A0));
 
@@ -391,8 +391,9 @@ void layer2_tx() {
     static byte current_crc  = 0;
 
     // If just finished sending previous byte
-    if (l1_busy_falling_edge) {
+    if (l1_busy_falling_edge) { // layer 1 finished sending in this iteration exactly
       if (sending_crc) {
+        Serial.print("sending crc if on layer 2 tx entered");
         // Finished crc -> move to next char with delay
         sending_crc   = false;
         l2_data_idx++;
@@ -421,7 +422,7 @@ void layer2_tx() {
 
         current_crc = CRC4_compute((byte)current_char);
 
-        // אפשר (לא חובה) להדפיס frame כמו ב-CRC4_tx:
+        // prints the 12 bits frame (data + crc)
         Serial.print("CRC4 TX frame for '");
         Serial.print(current_char);
         Serial.print("': ");
@@ -431,17 +432,18 @@ void layer2_tx() {
         }
         Serial.println();
 
-        // כאן אפשר להזריק שגיאות על ה-data בלבד (לבינתיים):
+        // inject errors into data byte only
         byte noisy_data = flip_bits((byte)current_char,
                                     NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
 
         l1_tx_buffer       = noisy_data;
         layer_2_tx_request = true;
-        sending_crc        = true;    // הבא שנשלח יהיה CRC
+        sending_crc        = true;    // next time send crc
+        // sending_crc will remain true until crc is sent after data
       }
       else {
-        // שלב 2: שולחים את ה-CRC עצמו
-        byte noisy_crc = current_crc; // אם תרצה, תוסיף גם כאן flip_bits נפרד
+        // Step 2: Send the CRC itself
+        byte noisy_crc = current_crc; // if you want, you can add a separate flip_bits here too
         l1_tx_buffer       = noisy_crc;
         layer_2_tx_request = true;
         // sending_crc ייהפך ל-false אחרי נפילת busy למעלה
