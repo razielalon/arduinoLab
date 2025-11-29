@@ -351,6 +351,17 @@ void layer2_tx() {
           tx_code_low  = flip_bits(tx_code_low,  NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
           tx_code_high = flip_bits(tx_code_high, NUM_ERR_BITS, ERR_BIT_1, ERR_BIT_2, ERR_BIT_3);
 
+          Serial.println("Hamming TX low coded:");
+          for (int i = 6; i >= 0; --i) {
+            Serial.print((tx_code_low >> i) & 1);
+          }
+          Serial.println();
+          Serial.println("Hamming TX high coded:");
+          for (int i = 6; i >= 0; --i) {
+            Serial.print((tx_code_high >> i) & 1);
+          }
+          Serial.println("");
+
           // start sending low nibble first
           l1_tx_buffer       = tx_code_low; // put data in layer 1 tx buffer
           layer_2_tx_request = true; // request layer 1 to send
@@ -384,7 +395,7 @@ void layer2_tx() {
   }
 
   // ==========================================
-  //            CRC MODE (FIXED)
+  //            CRC MODE
   // ==========================================
   if (L2Mode == CHECK_CRC) {
     
