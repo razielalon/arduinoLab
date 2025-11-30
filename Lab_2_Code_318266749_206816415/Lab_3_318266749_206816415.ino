@@ -13,7 +13,7 @@
 #define ERR_BIT_2     -1
 #define ERR_BIT_3     -1
 
-char data2send[] = "Elaf\n";
+char data2send[] = "Eladti\n";
 
 enum StateType {
   IDLE,
