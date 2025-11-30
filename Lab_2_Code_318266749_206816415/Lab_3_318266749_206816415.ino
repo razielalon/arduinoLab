@@ -699,7 +699,7 @@ void layer1_rx()
             layer_1_rx_got_char = true;
           }
           else { // stop bit isnt 1
-            Serial.println("RX: ERROR - bad STOP bit!");
+            Serial.println("RX: ERROR - bad STOP bit!?");
             RxState = ERROR;
             start_punish_time = curr_rx;
             l1_rx_buffer = char_reg; // still pass the received char to layer 2 (it will detect error from data)
