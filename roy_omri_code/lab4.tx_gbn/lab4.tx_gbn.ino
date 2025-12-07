@@ -5,7 +5,7 @@
 
 // Data
 const char Data[] = "ELAD&RAZIEL";
-const uint8_t DATA_LEN = sizeof(Data) - 1;  // בלי ה-'\0'
+const uint8_t DATA_LEN = sizeof(Data) - 1;  // without null terminator /0
 
 // ----- Frame layout -----
 #define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
@@ -27,12 +27,13 @@ bool timer_running        = false;
 float timeout             = INITIAL_TIMEOUT;
 
 void setup() {
-    Serial.begin(115200);
-    while (!Serial) { ; }
+    //Serial.begin(115200);
+    //while (!Serial) { ; }
 
-    setAddress(TX, 9);
+    setAddress(TX, 1);
 
-    Serial.println("GBN TX Started (N = 3)");
+    Serial.print("GBN TX Started N = ");
+    Serial.println(N);
 }
 
 void loop() {
@@ -48,11 +49,10 @@ int sn_distance(int from, int to) {
 
 void build_frame_for_sn(uint8_t *frame, int sn) {
     // Header
-    frame[0] = 0x19;         // dest
-    frame[1] = 0x09;         // src
-    frame[2] = 0;            // type = data
-    frame[3] = DATA_LEN;     // length = מספר הבייטים בפיילוד
-
+    frame[0] = 0x11;         // dest
+    frame[1] = 0x01;         // src
+    frame[2] = 0;            // type --> 0 for data
+    frame[3] = DATA_LEN;     // length = data length
     frame[4] = frame[3];     // ACK/DATA = length (data)
     frame[5] = sn;           // SN
 
@@ -85,10 +85,10 @@ void stop_timer_if_needed() {
 void TX_GBN_func() {
     unsigned long now = millis();
 
-    // 1) שליחת פריימים חדשים כל עוד יש מקום בחלון
-    // החלון מלא כאשר distance(base_sn, next_sn) == N
-    if (sn_distance(base_sn, next_sn) < N) {
-        // אפשר לשלוח פריים חדש עם SN = next_sn
+    // sends as many frames as possible within the window
+    // window is full when distance(base_sn, next_sn) == N
+    if (sn_distance(base_sn, next_sn) < N) { // allowed to send frame with SN = next_sn
+        
         build_frame_for_sn(frame_tx, next_sn);
 
         int sent = sendPackage(frame_tx, FRAME_SIZE);
@@ -96,7 +96,7 @@ void TX_GBN_func() {
             Serial.print("Sent frame with SN = ");
             Serial.println(next_sn);
 
-            // אם זה הפריים הראשון בחלון – מפעילים טיימר
+            // start timer if it's the first unACKed frame
             if (base_sn == next_sn) {
                 timer_start   = now;
                 timer_running = true;
@@ -106,11 +106,11 @@ void TX_GBN_func() {
         }
     }
 
-    // 2) קליטת ACK-ים (לא בודקים CRC לפי ההנחיה במטלה)
+    // 2) ACK reception - without checking crc for simplicity
     if (readPackage(ack_rx, 10) == 1) {
         int ack_sn = ack_rx[5];   // next expected SN בצד RX
 
-        // בדוק האם ack_sn באמת מקדם את base_sn
+        // check if ack should move the window forward
         if (sn_distance(base_sn, ack_sn) > 0 &&
             sn_distance(base_sn, ack_sn) <= N) {
 
