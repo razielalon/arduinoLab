@@ -8,7 +8,7 @@ const char Data[] = "ELAD&RAZIEL";
 
 // ----- Frame layout -----
 #define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
-#define DATA_LEN     8      // **חובה 8 לפי המעבדה**
+const uint8_t DATA_LEN = sizeof(Data) - 1;
 #define CRC_SIZE     4
 #define FRAME_SIZE   18     // 6 + 8 + 4
 
