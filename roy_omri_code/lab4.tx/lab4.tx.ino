@@ -80,7 +80,7 @@ void TX_func() {
     unsigned long current_time = millis();
     static int flag_send = 0;
 
-    // ========== STATE 0: בניית פריים ==========
+    // ========== STATE 0:  Build Frame ==========
     if (state_tx == BUILD_FRAME) {
 
         build_frame();
@@ -89,13 +89,13 @@ void TX_func() {
         state_tx  = SEND;
     }
 
-    // ========== STATE 1: שליחת פריים ==========
+    // ========== STATE 1: Sending Frame ==========
     else if (state_tx == SEND) {
 
         flag_send = sendPackage(frame_tx, FRAME_SIZE);
 
         if (flag_send == 1) {
-            last_sent_time = current_time;
+            last_sent_time = current_time; 
 
             Serial.print("Frame sent successfully. SN: ");
             Serial.println(current_frame);
@@ -104,21 +104,26 @@ void TX_func() {
         }
     }
 
-    // ========== STATE 2: המתנה ל-ACK ==========
+    // ========== STATE 2: Waiting for ACK ==========
     else if (state_tx == WAIT_FOR_ACK) {
 
-        // אם הגיע ACK
-        if (readPackage(ack_tx, 10) == 1) {
-            int received_sn = ack_tx[5];
+        // If ACK received
+        if (readPackage(ack_tx, 10) == 1) { // readPackage returns 1 if new payload available
+            int received_sn = ack_tx[5]; // ACK SN
 
-            // ב-S&W שלנו ה-ACK שולח SN = 1 - current_frame
+            // In Stop & Wait, ACK sends SN = 1 - current_frame
             if (received_sn == 1 - current_frame) {
 
-                unsigned long finish_rtt = millis() - start_rtt;
+                unsigned long finish_rtt = millis() - start_rtt; // measured RTT
 
-                frame_counter++;
+                frame_counter++; // increment RTT samples count
 
-                // עדכון timeout לפי RTT ממוצע
+                Serial.print("Old timeout: ");
+                Serial.println(timeout);
+                Serial.print("frame counter: ");
+                Serial.println(frame_counter);
+
+                // Update timeout based on average RTT
                 timeout =
                     ((float)(frame_counter - 1) / (float)frame_counter) * timeout +
                     (1.0f / (float)frame_counter) * (float)finish_rtt;
@@ -132,16 +137,16 @@ void TX_func() {
                 Serial.println(timeout);
                 Serial.println();
 
-                // הכנה לפריים הבא
+                // Prepare for next frame
                 current_frame = 1 - current_frame;
                 state_tx      = BUILD_FRAME;
             }
         }
 
-        // אם עבר זמן גדול מה-timeout ואין ACK → משדרים שוב
+        // If timeout occurred and no ACK received, retransmit
         if (millis() - last_sent_time > (unsigned long)timeout) {
-            Serial.println("Timeout waiting for ACK. Retransmitting...");
-            state_tx = SEND;  // לשלוח שוב את אותו פריים
+            Serial.println("Timeout while waiting for ACK. Retransmitting...");
+            state_tx = SEND;  // Resend the same frame
         }
     }
 }
