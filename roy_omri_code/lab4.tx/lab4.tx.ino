@@ -122,6 +122,7 @@ void TX_func() {
                 Serial.println(timeout);
                 Serial.print("frame counter: ");
                 Serial.println(frame_counter);
+            
 
                 // Update timeout based on average RTT
                 timeout =
@@ -138,8 +139,8 @@ void TX_func() {
                 Serial.println();
 
                 // Prepare for next frame
-                current_frame = 1 - current_frame;
-                state_tx      = BUILD_FRAME;
+                current_frame = 1 - current_frame; // toggle SN
+                state_tx      = BUILD_FRAME; // build next frame
             }
         }
 

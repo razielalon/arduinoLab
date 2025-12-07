@@ -1,10 +1,10 @@
 #include "EthernetLab.h"
 
 #define BAUD_RATE   115200
-#define LINE_RATE   10     // כמו שהשתמשת קודם (יחידות "מיוחדות")
+#define LINE_RATE   10    
 
-// חייב להתאים ל-TX
-const char Data[] = "ELAD&RAZIEL";
+// has to match - TX
+const char Data[] = "ELAD&RAZIEL"; // only for the frame length
 const uint8_t DATA_LEN = sizeof(Data) - 1;
 
 #define HEADER_SIZE  6
@@ -18,6 +18,7 @@ float total_frames = 0, bad_frames = 0, succ_frame = 0;
 float eff = 0.0;
 
 void setup() {
+    // happens inside setAddress():
     //Serial.begin(BAUD_RATE);
     //while (!Serial) { ; }
 
@@ -53,7 +54,7 @@ void RX_func() {
         Serial.print("ACK/DATA:    ");   Serial.println(ack_data_field);
         Serial.print("SN:          ");   Serial.println(received_sn);
 
-        // Safety: length לא חורג מגודל payload הצפוי
+        // Safety: don't exceed DATA_LEN
         if (length > DATA_LEN) {
             Serial.println("Length bigger than expected DATA_LEN, clamping.");
             length = DATA_LEN;
@@ -86,7 +87,7 @@ void RX_func() {
         }
         else if (received_sn == expected_frame) {
 
-            expected_frame = 1 - expected_frame;
+            expected_frame = 1 - expected_frame; // toggle expected frame
 
             Serial.print("Payload: ");
             Serial.println(payload);
@@ -100,7 +101,7 @@ void RX_func() {
             ack_frame[4] = 0;     // ACK/DATA = 0
             ack_frame[5] = 1 - received_sn;  // ACK for current SN
 
-            // CRC ל-ACK (לא חובה לבדוק, אבל נחשב נכון)
+            // CRC for ACK frame
             unsigned long ack_crc = calculateCRC(ack_frame, 6);
             ack_frame[6] = (ack_crc >> 24) & 0xFF;
             ack_frame[7] = (ack_crc >> 16) & 0xFF;
@@ -115,18 +116,18 @@ void RX_func() {
             }
 
             Serial.print("Sent ACK (SN field): ");
-            Serial.println(ack_frame[5]);
+            Serial.println(ack_frame[5]); // ACK SN field
 
             succ_frame++;
         }
-        else {
+        else { // Out of order frame
             bad_frames++;
             Serial.print("Out of order frame. Expected SN: ");
             Serial.println(expected_frame);
         }
 
-        // חישוב יעילות ושגיאות
-        eff = ((succ_frame * DATA_LEN * 8.0) / (float(millis()) * LINE_RATE)) * 1000;
+        // Calculate efficiency and errors
+        eff = ((succ_frame * DATA_LEN * 8.0) / (float(millis()) * LINE_RATE)) * 1000; // times 1000 to convert to seconds
         Serial.print("Efficiency = ");
         Serial.println(eff, 3);
 
