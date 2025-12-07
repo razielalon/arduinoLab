@@ -1,120 +1,161 @@
 #include "EthernetLab.h"
-#define frame_size 18
-#define INITIAL_TIMEOUT  10000
-#define MAX_FRAMES 8
-#define N 3
 
-uint8_t frame_tx[frame_size];
-uint8_t ack_tx[10];
-const char* Data = "ROY%OMRI";
-unsigned long CRC;
-static int frame_counter = 0;
-int state_tx = 0;
-int N_counter = 0;
-static unsigned long last_sent_time = 0;    
-int total_frames = 0, bad_frames = 0, current_frame = 0, next_frame = 0, ack_received = 0;  
-static float timeout = INITIAL_TIMEOUT;    
+#define FRAME_SIZE       18
+#define INITIAL_TIMEOUT  10000   // ms
+#define N                3       // window size == SN space (0,1,2)
 
+// Frame buffers
+uint8_t frame_tx[FRAME_SIZE];
+uint8_t ack_rx[10];
+
+// Data
+const char Data[] = "ROY%OMRI";
+
+// GBN state
+int base_sn      = 0;   // oldest unACKed
+int next_sn      = 0;   // next SN to send
+int rtt_samples  = 0;   // how many RTT samples used for timeout
+
+// timers
+unsigned long timer_start = 0;
+bool timer_running        = false;
+float timeout             = INITIAL_TIMEOUT;
 
 void setup() {
-  Serial.begin(115200);
-    void TX_func();
-    void receiveACK();
-    CRC = calculateCRC(Data, 8);
+    Serial.begin(115200);
+    while (!Serial) { ; }
+
     setAddress(TX, 9);
+
+    Serial.println("GBN TX Started (N = 3)");
 }
 
 void loop() {
-    TX_func();
+    TX_GBN_func();
 }
 
-void TX_func() {
-  static int received_sn = 0;
-    unsigned long current_time = millis();        // Current time
-    static int flag_send = 0;                     // Flag for frame send success
-    static float last_sent_time = 0;      // Time the last frame was sent
-    static float start_rtt = 0;
-    static float prev_finish_rtt = 0;                            // Start round-trip time
-    
+int sn_distance(int from, int to) {
+    // distance in modulo-N (SN in [0..N-1])
+    int d = to - from;
+    if (d < 0) d += N;
+    return d;
+}
 
-    // Frame preparation state
-    if (state_tx == 0) {
-        frame_tx[0] = 0x19; // destination_address
-        frame_tx[1] = 0x09; // source_address
-        frame_tx[2] = 0;    // frame_type
-        frame_tx[3] = 8;    // length (size of Data)
+void build_frame_for_sn(uint8_t *frame, int sn) {
+    // Header
+    frame[0] = 0x19;         // dest
+    frame[1] = 0x09;         // src
+    frame[2] = 0;            // type
+    frame[3] = 8;            // length
 
-        frame_tx[4] = frame_tx[3];             // Length confirmation
-        frame_tx[5] = current_frame;          // Sequence number
+    frame[4] = frame[3];     // ACK/DATA = length (data)
+    frame[5] = sn;           // SN
 
-        // Copy Data into the frame
-        for (int i = 0; i < frame_tx[3]; i++) {
-            frame_tx[6 + i] = Data[i];
+    // Payload
+    for (int i = 0; i < frame[3]; i++) {
+        frame[6 + i] = Data[i];
+    }
+
+    // CRC על 14 בייטים
+    unsigned long CRC = calculateCRC(frame, 14);
+    frame[14] = (CRC >> 24) & 0xFF;
+    frame[15] = (CRC >> 16) & 0xFF;
+    frame[16] = (CRC >> 8)  & 0xFF;
+    frame[17] =  CRC        & 0xFF;
+}
+
+void start_timer_if_needed() {
+    if (!timer_running) {
+        timer_start   = millis();
+        timer_running = true;
+    }
+}
+
+void stop_timer_if_needed() {
+    timer_running = false;
+}
+
+void TX_GBN_func() {
+    unsigned long now = millis();
+
+    // 1) שליחת פריימים חדשים כל עוד יש מקום בחלון
+    // החלון מלא כאשר distance(base_sn, next_sn) == N
+    if (sn_distance(base_sn, next_sn) < N) {
+        // אפשר לשלוח פריים חדש עם SN = next_sn
+        build_frame_for_sn(frame_tx, next_sn);
+
+        int sent = sendPackage(frame_tx, FRAME_SIZE);
+        if (sent == 1) {
+            Serial.print("Sent frame with SN = ");
+            Serial.println(next_sn);
+
+            // אם זה הפריים הראשון בחלון – מפעילים טיימר
+            if (base_sn == next_sn) {
+                timer_start   = now;
+                timer_running = true;
+            }
+
+            next_sn = (next_sn + 1) % N;  // SN במודולו N
         }
-
-        // Calculate CRC
-        unsigned long CRC = calculateCRC(frame_tx, 14);
-        frame_tx[14] = (CRC >> 24) & 0xFF;
-        frame_tx[15] = (CRC >> 16) & 0xFF;
-        frame_tx[16] = (CRC >> 8) & 0xFF;
-        frame_tx[17] = CRC & 0xFF;
-
-        state_tx = 1; // Transition to the next state
-        start_rtt = millis(); // start transmition
     }
-    // Frame transmission state
-    else if (state_tx == 1) {
-        flag_send = sendPackage(frame_tx, frame_size);
 
-        if (flag_send == 1) { // Frame sent successfully
-            N_counter ++;
-            Serial.print("Frame sent successfully. SN: ");
-            Serial.println(current_frame);
-            if (N_counter == N){
-                state_tx = 2; // Transition to ACK waiting state
-                N_counter = 0;
-            }
-            else {
-              current_frame = (current_frame + 1) % N;
-              frame_tx[5] = current_frame;
-            }
-            
-        } 
-    }
-    // ACK waiting state
-    else if (state_tx == 2) {
-      current_time = millis();
-        if (readPackage(ack_tx, 10)) {
-            received_sn = ack_tx[5];  // Get the sequence number of the received ACK
-            float finish_rtt = millis() - start_rtt; // Calculate RTT
-            frame_counter++; // Increment total frame counter
-            Serial.print("frame = ");
-            Serial.println(frame_counter);
+    // 2) קליטת ACK-ים (לא בודקים CRC לפי ההנחיה במטלה)
+    if (readPackage(ack_rx, 10) == 1) {
+        int ack_sn = ack_rx[5];   // next expected SN בצד RX
 
-          //Update timeout using exponential moving average
-            timeout = ((float(frame_counter - 1.0) / (float)frame_counter) * timeout) +
-                      ((1.0 / frame_counter) * finish_rtt);
+        // בדוק האם ack_sn באמת מקדם את base_sn
+        if (sn_distance(base_sn, ack_sn) > 0 &&
+            sn_distance(base_sn, ack_sn) <= N) {
 
-            Serial.print("ACK received. SN: ");
-            Serial.println(received_sn);
-            Serial.print("New Timeout: ");
+            // יש התקדמות ב-ACK → מודדים RTT
+            unsigned long sample_rtt = millis() - timer_start;
+            rtt_samples++;
+
+            // עדכון timeout לפי ממוצע
+            timeout =
+                ((float)(rtt_samples - 1) / (float)rtt_samples) * timeout +
+                (1.0f / (float)rtt_samples) * (float)sample_rtt;
+
+            Serial.print("ACK received. next expected SN = ");
+            Serial.println(ack_sn);
+            Serial.print("RTT sample = ");
+            Serial.print(sample_rtt);
+            Serial.println(" ms");
+            Serial.print("New timeout = ");
             Serial.println(timeout);
             Serial.println();
 
-            // Prepare for next frame
-            current_frame = received_sn;
-            state_tx = 0; // Return to frame preparation
-            prev_finish_rtt = finish_rtt;
-        
-        } else if (current_time - start_rtt > timeout) { // Timeout occurred
-            Serial.println("Timeout waiting for ACK. Retrying...");
-            state_tx = 1; // Retry sending frame
-            current_frame = received_sn;
+            // מקדמים את בסיס החלון
+            base_sn = ack_sn;
+
+            // אם כל הפריימים אושרו – נעצור טיימר
+            if (base_sn == next_sn) {
+                stop_timer_if_needed();
+            } else {
+                // אחרת – הטיימר מתייחס לפריים הראשון הלא מאושר
+                timer_start = millis();
+                timer_running = true;
+            }
         }
     }
+
+    // 3) Timeout – משדרים מחדש את כל הפריימים הלא מאושרים
+    if (timer_running && (millis() - timer_start > (unsigned long)timeout)) {
+        Serial.println("Timeout! Retransmitting window...");
+
+        int sn = base_sn;
+        while (sn != next_sn) {
+            build_frame_for_sn(frame_tx, sn);
+            int sent = sendPackage(frame_tx, FRAME_SIZE);
+            if (sent == 1) {
+                Serial.print("Retransmitted SN = ");
+                Serial.println(sn);
+            }
+            sn = (sn + 1) % N;
+        }
+
+        // מאפסים טיימר לחלון החדש
+        timer_start   = millis();
+        timer_running = true;
+    }
 }
-
-
-
-
-
