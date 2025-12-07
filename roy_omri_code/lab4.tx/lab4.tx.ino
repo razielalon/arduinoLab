@@ -9,7 +9,8 @@ uint8_t ack_tx[10];
 
 const char Data[] = "ROY%OMRI";
 
-int state_tx       = 0;  // 0 = build frame, 1 = send, 2 = wait for ACK
+enum State { BUILD_FRAME, SEND, WAIT_FOR_ACK };
+State state_tx = BUILD_FRAME;
 int current_frame  = 0;  // SN: 0/1
 int frame_counter  = 0;  // how many RTT samples we already took
 
@@ -35,7 +36,7 @@ void TX_func() {
     static int flag_send = 0;
 
     // ========== STATE 0: בניית פריים ==========
-    if (state_tx == 0) {
+    if (state_tx == BUILD_FRAME) {
 
         // Header
         frame_tx[0] = 0x19;          // Destination (0x10 + 9)
@@ -63,11 +64,11 @@ void TX_func() {
         Serial.println(current_frame);
 
         start_rtt = millis();
-        state_tx  = 1;  // לעבור לשלב השידור
+        state_tx  = SEND;  // לעבור לשלב השידור
     }
 
     // ========== STATE 1: שליחת פריים ==========
-    else if (state_tx == 1) {
+    else if (state_tx == SEND) {
 
         flag_send = sendPackage(frame_tx, FRAME_SIZE);
 
@@ -77,12 +78,12 @@ void TX_func() {
             Serial.print("Frame sent successfully. SN: ");
             Serial.println(current_frame);
 
-            state_tx = 2;  // מחכים ל-ACK
+            state_tx = WAIT_FOR_ACK;  // מחכים ל-ACK
         }
     }
 
     // ========== STATE 2: המתנה ל-ACK ==========
-    else if (state_tx == 2) {
+    else if (state_tx == WAIT_FOR_ACK) {
 
         // אם הגיע ACK
         if (readPackage(ack_tx, 10) == 1) {
@@ -112,14 +113,14 @@ void TX_func() {
 
                 // הכנה לפריים הבא
                 current_frame = 1 - current_frame;
-                state_tx      = 0;  // חוזרים לבניית פריים חדש
+                state_tx      = BUILD_FRAME;  // חוזרים לבניית פריים חדש
             }
         }
 
         // אם עבר זמן גדול מה-timeout ואין ACK → משדרים שוב
         if (millis() - last_sent_time > (unsigned long)timeout) {
             Serial.println("Timeout waiting for ACK. Retransmitting...");
-            state_tx = 1;  // לשלוח שוב את אותו פריים
+            state_tx = SEND;  // לשלוח שוב את אותו פריים
         }
     }
 }
