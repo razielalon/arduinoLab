@@ -1,10 +1,18 @@
 #include "EthernetLab.h"
-#define frame_size 18
+//#define frame_size 18
 #define MAX_FRAMES 8  
 #define LINE_RATE 10
 #define N 3
 
-uint8_t frame_rx[frame_size];
+// has to match - TX
+const char Data[] = "ELAD&RAZIEL"; // only for the frame length
+const uint8_t DATA_LEN = sizeof(Data) - 1;
+
+#define HEADER_SIZE  6
+#define CRC_SIZE     4
+#define FRAME_SIZE   (HEADER_SIZE + DATA_LEN + CRC_SIZE)
+
+uint8_t frame_rx[FRAME_SIZE];
 int expected_frame = 0;
 static int error_flag = 0;  
 static int N_counter = 0;      

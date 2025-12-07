@@ -1,15 +1,21 @@
 #include "EthernetLab.h"
 
-#define FRAME_SIZE       18
+//#define FRAME_SIZE      18
 #define INITIAL_TIMEOUT  10000   // ms
 #define N                3       // window size == SN space (0,1,2)
+
+// Data
+const char Data[] = "ELAD&RAZIEL";
+// ----- Frame layout -----
+#define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
+#define CRC_SIZE     4
+#define FRAME_SIZE   (HEADER_SIZE + sizeof(Data) + CRC_SIZE)
 
 // Frame buffers
 uint8_t frame_tx[FRAME_SIZE];
 uint8_t ack_rx[10];
 
-// Data
-const char Data[] = "ROY%OMRI";
+
 
 // GBN state
 int base_sn      = 0;   // oldest unACKed
