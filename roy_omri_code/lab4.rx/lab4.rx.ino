@@ -18,10 +18,10 @@ float total_frames = 0, bad_frames = 0, succ_frame = 0;
 float eff = 0.0;
 
 void setup() {
-    Serial.begin(BAUD_RATE);
-    while (!Serial) { ; }
+    //Serial.begin(BAUD_RATE);
+    //while (!Serial) { ; }
 
-    setAddress(RX, 9);
+    setAddress(RX, 1);
 
     Serial.println("Starting in mode: RX (Stop & Wait)");
 }
