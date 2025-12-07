@@ -1,31 +1,69 @@
 #include "EthernetLab.h"
 
-#define FRAME_SIZE       18
+#define BAUD_RATE        115200
 #define INITIAL_TIMEOUT  10000   // ms
 #define MAX_FRAMES       8
-#define BAUD_RATE        115200
+
+// ----- Payload -----
+const char Data[] = "ELAD&RAZIEL";
+const uint8_t DATA_LEN = sizeof(Data) - 1; // בלי ה-'\0'
+
+// ----- Frame layout -----
+#define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
+#define CRC_SIZE     4
+#define FRAME_SIZE   (HEADER_SIZE + DATA_LEN + CRC_SIZE)
 
 uint8_t frame_tx[FRAME_SIZE];
 uint8_t ack_tx[10];
 
-const char Data[] = "ELAD&RAZIEL";
-
 enum State { BUILD_FRAME, SEND, WAIT_FOR_ACK };
 State state_tx = BUILD_FRAME;
+
 int current_frame  = 0;  // SN: 0/1
-int frame_counter  = 0;  // how many RTT samples we already took
+int frame_counter  = 0;  // number of RTT samples
 
 unsigned long last_sent_time = 0;
 unsigned long start_rtt      = 0;
 float timeout                = INITIAL_TIMEOUT;
 
+void build_frame() {
+    // Header
+    frame_tx[0] = 0x19;          // Destination (0x10 + 9)
+    frame_tx[1] = 0x09;          // Source      (0x00 + 9)
+    frame_tx[2] = 0;             // Type
+    frame_tx[3] = DATA_LEN;      // Length (payload size)
+
+    frame_tx[4] = frame_tx[3];   // ACK/DATA field = length (data)
+    frame_tx[5] = current_frame; // SN
+
+    // Payload
+    for (int i = 0; i < DATA_LEN; i++) {
+        frame_tx[6 + i] = Data[i];
+    }
+
+    // CRC index is right after payload
+    int crc_index = 6 + DATA_LEN;
+    unsigned long CRC = calculateCRC(frame_tx, crc_index);
+
+    frame_tx[crc_index + 0] = (CRC >> 24) & 0xFF;
+    frame_tx[crc_index + 1] = (CRC >> 16) & 0xFF;
+    frame_tx[crc_index + 2] = (CRC >> 8)  & 0xFF;
+    frame_tx[crc_index + 3] =  CRC        & 0xFF;
+
+    Serial.println("\n=== Building frame ===");
+    Serial.print("SN = ");
+    Serial.println(current_frame);
+    Serial.print("Length (DATA_LEN) = ");
+    Serial.println(DATA_LEN);
+}
+
 void setup() {
     Serial.begin(BAUD_RATE);
-    while (!Serial) { ; }  // אופציונלי בלוחות מסוימים
+    while (!Serial) { ; }
 
-    setAddress(TX, 9);     // מגדיר כתובות + Ethernet
+    setAddress(TX, 9);
 
-    Serial.println("Starting in mode: TX");
+    Serial.println("Starting in mode: TX (Stop & Wait)");
 }
 
 void loop() {
@@ -39,33 +77,10 @@ void TX_func() {
     // ========== STATE 0: בניית פריים ==========
     if (state_tx == BUILD_FRAME) {
 
-        // Header
-        frame_tx[0] = 0x19;          // Destination (0x10 + 9)
-        frame_tx[1] = 0x09;          // Source      (0x00 + 9)
-        frame_tx[2] = 0;             // Type
-        frame_tx[3] = 12;            // Length = גודל "ELAD&RAZIEL"
-
-        frame_tx[4] = frame_tx[3];   // ACK/DATA field = length (data)
-        frame_tx[5] = current_frame; // SN
-
-        // Payload
-        for (int i = 0; i < frame_tx[3]; i++) {
-            frame_tx[6 + i] = Data[i];
-        }
-
-        // CRC על 14 הבייטים הראשונים
-        unsigned long CRC = calculateCRC(frame_tx, 14);
-        frame_tx[14] = (CRC >> 24) & 0xFF;
-        frame_tx[15] = (CRC >> 16) & 0xFF;
-        frame_tx[16] = (CRC >> 8)  & 0xFF;
-        frame_tx[17] =  CRC        & 0xFF;
-
-        Serial.println("\n=== Building frame ===");
-        Serial.print("SN = ");
-        Serial.println(current_frame);
+        build_frame();
 
         start_rtt = millis();
-        state_tx  = SEND;  // לעבור לשלב השידור
+        state_tx  = SEND;
     }
 
     // ========== STATE 1: שליחת פריים ==========
@@ -88,10 +103,9 @@ void TX_func() {
 
         // אם הגיע ACK
         if (readPackage(ack_tx, 10) == 1) {
-
             int received_sn = ack_tx[5];
 
-            // אם ה-ACK מתאים (1 - current_frame)
+            // ב-S&W שלנו ה-ACK שולח SN = 1 - current_frame
             if (received_sn == 1 - current_frame) {
 
                 unsigned long finish_rtt = millis() - start_rtt;
@@ -114,7 +128,7 @@ void TX_func() {
 
                 // הכנה לפריים הבא
                 current_frame = 1 - current_frame;
-                state_tx      = BUILD_FRAME;  // חוזרים לבניית פריים חדש
+                state_tx      = BUILD_FRAME;
             }
         }
 
