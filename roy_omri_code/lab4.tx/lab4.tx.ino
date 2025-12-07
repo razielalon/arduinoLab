@@ -64,10 +64,10 @@ void build_frame() {
 }
 
 void setup() {
-    Serial.begin(BAUD_RATE);
-    while (!Serial) { ; }
+    //Serial.begin(BAUD_RATE);
+    //while (!Serial) { ; } // wait for serial port to connect.
 
-    setAddress(TX, 9);
+    setAddress(TX, 1);
 
     Serial.println("Starting in mode: TX (Stop & Wait)");
 }
