@@ -1,21 +1,20 @@
 #include "EthernetLab.h"
 
-//#define FRAME_SIZE      18
 #define INITIAL_TIMEOUT  10000   // ms
 #define N                3       // window size == SN space (0,1,2)
 
 // Data
 const char Data[] = "ELAD&RAZIEL";
+const uint8_t DATA_LEN = sizeof(Data) - 1;  // בלי ה-'\0'
+
 // ----- Frame layout -----
 #define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
 #define CRC_SIZE     4
-#define FRAME_SIZE   (HEADER_SIZE + sizeof(Data) + CRC_SIZE)
+#define FRAME_SIZE   (HEADER_SIZE + DATA_LEN + CRC_SIZE)
 
 // Frame buffers
 uint8_t frame_tx[FRAME_SIZE];
 uint8_t ack_rx[10];
-
-
 
 // GBN state
 int base_sn      = 0;   // oldest unACKed
@@ -51,23 +50,25 @@ void build_frame_for_sn(uint8_t *frame, int sn) {
     // Header
     frame[0] = 0x19;         // dest
     frame[1] = 0x09;         // src
-    frame[2] = 0;            // type
-    frame[3] = 8;            // length
+    frame[2] = 0;            // type = data
+    frame[3] = DATA_LEN;     // length = מספר הבייטים בפיילוד
 
     frame[4] = frame[3];     // ACK/DATA = length (data)
     frame[5] = sn;           // SN
 
     // Payload
-    for (int i = 0; i < frame[3]; i++) {
+    for (int i = 0; i < DATA_LEN; i++) {
         frame[6 + i] = Data[i];
     }
 
-    // CRC על 14 בייטים
-    unsigned long CRC = calculateCRC(frame, 14);
-    frame[14] = (CRC >> 24) & 0xFF;
-    frame[15] = (CRC >> 16) & 0xFF;
-    frame[16] = (CRC >> 8)  & 0xFF;
-    frame[17] =  CRC        & 0xFF;
+    // CRC – מחושב על header+payload, כלומר על HEADER_SIZE + DATA_LEN בייטים
+    int crc_index = HEADER_SIZE + DATA_LEN;   // 6 + DATA_LEN
+    unsigned long CRC = calculateCRC(frame, crc_index);
+
+    frame[crc_index + 0] = (CRC >> 24) & 0xFF;
+    frame[crc_index + 1] = (CRC >> 16) & 0xFF;
+    frame[crc_index + 2] = (CRC >> 8)  & 0xFF;
+    frame[crc_index + 3] =  CRC        & 0xFF;
 }
 
 void start_timer_if_needed() {

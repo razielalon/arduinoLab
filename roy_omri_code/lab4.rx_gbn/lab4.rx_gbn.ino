@@ -1,11 +1,11 @@
 #include "EthernetLab.h"
-//#define frame_size 18
+
 #define MAX_FRAMES 8  
-#define LINE_RATE 10
-#define N 3
+#define LINE_RATE  10
+#define N          3
 
 // has to match - TX
-const char Data[] = "ELAD&RAZIEL"; // only for the frame length
+const char Data[] = "ELAD&RAZIEL"; 
 const uint8_t DATA_LEN = sizeof(Data) - 1;
 
 #define HEADER_SIZE  6
@@ -16,6 +16,7 @@ uint8_t frame_rx[FRAME_SIZE];
 int expected_frame = 0;
 static int error_flag = 0;  
 static int N_counter = 0;      
+
 float total_frames = 0, bad_frames = 0, succ_frame = 0; 
 float eff = 0.0;
 
@@ -35,7 +36,7 @@ void RX_func() {
     static float Error_prob = 0;
     int flag_receive;
 
-    flag_receive = readPackage(frame_rx, frame_size);
+    flag_receive = readPackage(frame_rx, FRAME_SIZE);
   
     if (flag_receive == 1) {
 
@@ -47,21 +48,29 @@ void RX_func() {
         uint8_t destination_address = frame_rx[0];
         uint8_t source_address      = frame_rx[1];
         uint8_t frame_type          = frame_rx[2];
-        uint8_t length              = frame_rx[3];
-        int received_sn             = frame_rx[5];  
+        uint8_t length              = frame_rx[3];   // כמה בייטים בפיילוד
+        int     received_sn         = frame_rx[5];  
 
-        uint8_t data[8] = {0};
+        // הגנה בסיסית – לא לקרוא מעבר לפריים
+        if (length > DATA_LEN) {
+            length = DATA_LEN;
+        }
+
+        uint8_t data[DATA_LEN] = {0};
         for (uint8_t i = 0; i < length; ++i) {
             data[i] = frame_rx[6 + i];
         }
-      
+
+        // אינדקס ה-CRC לפי האורך
+        int crc_index = HEADER_SIZE + length;  // 6 + length
+
         unsigned long received_crc = 0;
-        received_crc |= (unsigned long)frame_rx[14] << 24;
-        received_crc |= (unsigned long)frame_rx[15] << 16;
-        received_crc |= (unsigned long)frame_rx[16] << 8;
-        received_crc |= (unsigned long)frame_rx[17];
-      
-        unsigned long calculated_crc = calculateCRC(frame_rx, 14);
+        received_crc |= (unsigned long)frame_rx[crc_index + 0] << 24;
+        received_crc |= (unsigned long)frame_rx[crc_index + 1] << 16;
+        received_crc |= (unsigned long)frame_rx[crc_index + 2] << 8;
+        received_crc |= (unsigned long)frame_rx[crc_index + 3];
+
+        unsigned long calculated_crc = calculateCRC(frame_rx, crc_index);
 
         // ========= מקרה 1: CRC לא תקין =========
         if (calculated_crc != received_crc) {
