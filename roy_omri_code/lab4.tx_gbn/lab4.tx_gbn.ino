@@ -110,9 +110,11 @@ void TX_GBN_func() {
     if (readPackage(ack_rx, 10) == 1) {
         int ack_sn = ack_rx[5];   // next expected SN בצד RX
 
-        // check if ack should move the window forward
-        if (sn_distance(base_sn, ack_sn) > 0 &&
-            sn_distance(base_sn, ack_sn) <= N) {
+        int dist_base_ack  = sn_distance(base_sn, ack_sn);
+        int dist_base_next = sn_distance(base_sn, next_sn);
+
+    // ack_sn באמת מקדם את base_sn ונמצא בתוך החלון ששודר
+        if (dist_base_ack > 0 && dist_base_ack <= dist_base_next) {
 
             // יש התקדמות ב-ACK → מודדים RTT
             unsigned long sample_rtt = millis() - timer_start;
