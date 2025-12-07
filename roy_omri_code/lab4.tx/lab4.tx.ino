@@ -8,7 +8,7 @@
 uint8_t frame_tx[FRAME_SIZE];
 uint8_t ack_tx[10];
 
-const char Data[] = "ELAD&RAZ";
+const char Data[] = "ELAD&RAZIEL";
 
 enum State { BUILD_FRAME, SEND, WAIT_FOR_ACK };
 State state_tx = BUILD_FRAME;
@@ -43,7 +43,7 @@ void TX_func() {
         frame_tx[0] = 0x19;          // Destination (0x10 + 9)
         frame_tx[1] = 0x09;          // Source      (0x00 + 9)
         frame_tx[2] = 0;             // Type
-        frame_tx[3] = 8;             // Length = גודל "ROY%OMRI"
+        frame_tx[3] = 12;            // Length = גודל "ELAD&RAZIEL"
 
         frame_tx[4] = frame_tx[3];   // ACK/DATA field = length (data)
         frame_tx[5] = current_frame; // SN
