@@ -3,14 +3,14 @@
 #define INITIAL_TIMEOUT  10000   // ms
 #define N                3       // window size == SN space (0,1,2)
 
-// Data
+// Data (נשתמש רק ב-8 תווים ראשונים)
 const char Data[] = "ELAD&RAZIEL";
-const uint8_t DATA_LEN = sizeof(Data) - 1;  // without null terminator /0
 
 // ----- Frame layout -----
 #define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
+#define DATA_LEN     8      // **חובה 8 לפי המעבדה**
 #define CRC_SIZE     4
-#define FRAME_SIZE   (HEADER_SIZE + DATA_LEN + CRC_SIZE)
+#define FRAME_SIZE   18     // 6 + 8 + 4
 
 // Frame buffers
 uint8_t frame_tx[FRAME_SIZE];
@@ -23,16 +23,16 @@ int rtt_samples  = 0;   // how many RTT samples used for timeout
 
 // timers
 unsigned long timer_start = 0;
-bool timer_running        = false;
+bool  timer_running       = false;
 float timeout             = INITIAL_TIMEOUT;
 
 void setup() {
-    //Serial.begin(115200);
-    //while (!Serial) { ; }
+    Serial.begin(115200);
+    while (!Serial) { ; }
 
-    setAddress(TX, 1);
+    setAddress(TX, 9);
 
-    Serial.print("GBN TX Started N = ");
+    Serial.print("Starting in mode: TX\nGBN TX Started N = ");
     Serial.println(N);
 }
 
@@ -41,7 +41,6 @@ void loop() {
 }
 
 int sn_distance(int from, int to) {
-    // distance in modulo-N (SN in [0..N-1])
     int d = to - from;
     if (d < 0) d += N;
     return d;
@@ -49,33 +48,27 @@ int sn_distance(int from, int to) {
 
 void build_frame_for_sn(uint8_t *frame, int sn) {
     // Header
-    frame[0] = 0x11;         // dest
-    frame[1] = 0x01;         // src
-    frame[2] = 0;            // type --> 0 for data
-    frame[3] = DATA_LEN;     // length = data length
-    frame[4] = frame[3];     // ACK/DATA = length (data)
-    frame[5] = sn;           // SN
+    frame[0] = 0x11;       // dest
+    frame[1] = 0x01;       // src
+    frame[2] = 0;          // type = data
+    frame[3] = DATA_LEN;   // length = 8
 
-    // Payload
+    frame[4] = frame[3];   // ACK/DATA = length
+    frame[5] = sn;         // SN
+
+    // Payload – רק 8 בייט
     for (int i = 0; i < DATA_LEN; i++) {
         frame[6 + i] = Data[i];
     }
 
-    // CRC – מחושב על header+payload, כלומר על HEADER_SIZE + DATA_LEN בייטים
-    int crc_index = HEADER_SIZE + DATA_LEN;   // 6 + DATA_LEN
+    // CRC על 14 בייט (6 header + 8 data)
+    int crc_index = HEADER_SIZE + DATA_LEN; // 14
     unsigned long CRC = calculateCRC(frame, crc_index);
 
     frame[crc_index + 0] = (CRC >> 24) & 0xFF;
     frame[crc_index + 1] = (CRC >> 16) & 0xFF;
     frame[crc_index + 2] = (CRC >> 8)  & 0xFF;
     frame[crc_index + 3] =  CRC        & 0xFF;
-}
-
-void start_timer_if_needed() {
-    if (!timer_running) {
-        timer_start   = millis();
-        timer_running = true;
-    }
 }
 
 void stop_timer_if_needed() {
@@ -85,10 +78,8 @@ void stop_timer_if_needed() {
 void TX_GBN_func() {
     unsigned long now = millis();
 
-    // sends as many frames as possible within the window
-    // window is full when distance(base_sn, next_sn) == N
-    if (sn_distance(base_sn, next_sn) < N) { // allowed to send frame with SN = next_sn
-        
+    // 1) שליחת פריימים חדשים כל עוד יש מקום בחלון
+    if (sn_distance(base_sn, next_sn) < N) {
         build_frame_for_sn(frame_tx, next_sn);
 
         int sent = sendPackage(frame_tx, FRAME_SIZE);
@@ -96,31 +87,28 @@ void TX_GBN_func() {
             Serial.print("Sent frame with SN = ");
             Serial.println(next_sn);
 
-            // start timer if it's the first unACKed frame
             if (base_sn == next_sn) {
                 timer_start   = now;
                 timer_running = true;
             }
 
-            next_sn = (next_sn + 1) % N;  // SN במודולו N
+            next_sn = (next_sn + 1) % N;
         }
     }
 
-    // 2) ACK reception - without checking crc for simplicity
+    // 2) קליטת ACK-ים
     if (readPackage(ack_rx, 10) == 1) {
         int ack_sn = ack_rx[5];   // next expected SN בצד RX
 
         int dist_base_ack  = sn_distance(base_sn, ack_sn);
         int dist_base_next = sn_distance(base_sn, next_sn);
 
-    // ack_sn באמת מקדם את base_sn ונמצא בתוך החלון ששודר
+        // ack_sn באמת מקדם את החלון ונמצא בתוך התחום [base_sn+1 .. next_sn]
         if (dist_base_ack > 0 && dist_base_ack <= dist_base_next) {
 
-            // יש התקדמות ב-ACK → מודדים RTT
             unsigned long sample_rtt = millis() - timer_start;
             rtt_samples++;
 
-            // עדכון timeout לפי ממוצע
             timeout =
                 ((float)(rtt_samples - 1) / (float)rtt_samples) * timeout +
                 (1.0f / (float)rtt_samples) * (float)sample_rtt;
@@ -134,15 +122,12 @@ void TX_GBN_func() {
             Serial.println(timeout);
             Serial.println();
 
-            // מקדמים את בסיס החלון
             base_sn = ack_sn;
 
-            // אם כל הפריימים אושרו – נעצור טיימר
             if (base_sn == next_sn) {
                 stop_timer_if_needed();
             } else {
-                // אחרת – הטיימר מתייחס לפריים הראשון הלא מאושר
-                timer_start = millis();
+                timer_start   = millis();
                 timer_running = true;
             }
         }
@@ -163,7 +148,6 @@ void TX_GBN_func() {
             sn = (sn + 1) % N;
         }
 
-        // מאפסים טיימר לחלון החדש
         timer_start   = millis();
         timer_running = true;
     }
