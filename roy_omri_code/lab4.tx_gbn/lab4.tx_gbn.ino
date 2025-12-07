@@ -5,12 +5,12 @@
 
 // Data (נשתמש רק ב-8 תווים ראשונים)
 const char Data[] = "ELAD&RAZIEL";
+const uint8_t DATA_LEN = sizeof(Data) - 1;
 
 // ----- Frame layout -----
-#define HEADER_SIZE  6      // dest, src, type, length, ack/data, SN
-const uint8_t DATA_LEN = sizeof(Data) - 1;
+#define HEADER_SIZE  6
 #define CRC_SIZE     4
-#define FRAME_SIZE   18     // 6 + 8 + 4
+#define FRAME_SIZE   (HEADER_SIZE + DATA_LEN + CRC_SIZE)
 
 // Frame buffers
 uint8_t frame_tx[FRAME_SIZE];
