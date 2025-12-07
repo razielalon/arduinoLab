@@ -2,6 +2,8 @@
 #define frame_size 18
 #define MAX_FRAMES 8  
 #define LINE_RATE 10
+#define BAUD_RATE        115200
+
 
 uint8_t frame_rx[frame_size];
 int expected_frame = 0;        
@@ -9,7 +11,7 @@ float total_frames = 0, bad_frames = 0, succ_frame = 0;
 float eff = 0.0;
 
 void setup() {
-    Serial.begin(115200);   // תואם ל-setAddress ולמה שצריך במעבדה
+    Serial.begin(BAUD_RATE);   // תואם ל-setAddress ולמה שצריך במעבדה
     while (!Serial) { ; }   // אופציונלי
 
     setAddress(RX, 9);

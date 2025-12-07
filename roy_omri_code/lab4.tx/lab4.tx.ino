@@ -3,11 +3,12 @@
 #define FRAME_SIZE       18
 #define INITIAL_TIMEOUT  10000   // ms
 #define MAX_FRAMES       8
+#define BAUD_RATE        115200
 
 uint8_t frame_tx[FRAME_SIZE];
 uint8_t ack_tx[10];
 
-const char Data[] = "ROY%OMRI";
+const char Data[] = "ELAD&RAZ";
 
 enum State { BUILD_FRAME, SEND, WAIT_FOR_ACK };
 State state_tx = BUILD_FRAME;
@@ -19,7 +20,7 @@ unsigned long start_rtt      = 0;
 float timeout                = INITIAL_TIMEOUT;
 
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(BAUD_RATE);
     while (!Serial) { ; }  // אופציונלי בלוחות מסוימים
 
     setAddress(TX, 9);     // מגדיר כתובות + Ethernet
