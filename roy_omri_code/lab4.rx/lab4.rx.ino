@@ -93,8 +93,8 @@ void RX_func() {
 
             // ACK frame
             uint8_t ack_frame[10];
-            ack_frame[0] = 0x09;  // destination_address
-            ack_frame[1] = 0x19;  // source_address
+            ack_frame[0] = 0x01;  // destination_address
+            ack_frame[1] = 0x11;  // source_address
             ack_frame[2] = 0;     // frame_type (ACK)
             ack_frame[3] = 0;     // length
             ack_frame[4] = 0;     // ACK/DATA = 0

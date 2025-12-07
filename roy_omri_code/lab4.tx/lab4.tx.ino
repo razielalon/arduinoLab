@@ -20,7 +20,7 @@ enum State { BUILD_FRAME, SEND, WAIT_FOR_ACK };
 State state_tx = BUILD_FRAME;
 
 int current_frame  = 0;  // SN: 0/1
-int frame_counter  = 0;  // number of RTT samples
+int frame_counter  = 0;  // number of RTT samples - incremented upon successful ACK
 
 unsigned long last_sent_time = 0;
 unsigned long start_rtt      = 0;
@@ -28,8 +28,8 @@ float timeout                = INITIAL_TIMEOUT;
 
 void build_frame() {
     // Header
-    frame_tx[0] = 0x19;          // Destination (0x10 + 9)
-    frame_tx[1] = 0x09;          // Source      (0x00 + 9)
+    frame_tx[0] = 0x11;          // Destination (0x10 + 1)
+    frame_tx[1] = 0x01;          // Source      (0x00 + 1)
     frame_tx[2] = 0;             // Type
     frame_tx[3] = DATA_LEN;      // Length (payload size)
 
