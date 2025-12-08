@@ -79,24 +79,25 @@ void TX_GBN_func() {
     unsigned long now = millis();
 
     // Sending frames as long as there's room for more
-    if (sn_distance(base_sn, next_sn) < N) {
-        build_frame_for_sn(frame_tx, next_sn);
+    // sn_distance(base_sn, next_sn) < N  <=>  next_sn is in the window
+    if (sn_distance(base_sn, next_sn) < N) { // base_sn is the oldest unACKed frame(start of window), next_sn is the next SN to send
+        build_frame_for_sn(frame_tx, next_sn); // build frame for next_sn
 
         int sent = sendPackage(frame_tx, FRAME_SIZE);
-        if (sent == 1) {
+        if (sent == 1) { // successfully sent
             Serial.print("Sent frame with SN = ");
             Serial.println(next_sn);
 
-            if (base_sn == next_sn) {
+            if (base_sn == next_sn) { // the specific moment when we transition from idle to busy (window was empty, now has 1 frame), its the time to start the timer, because we have unACKed frames now, and there is one timer for the whole window
                 timer_start   = now;
                 timer_running = true;
             }
 
-            next_sn = (next_sn + 1) % N;
+            next_sn = (next_sn + 1) % N; // advance next_sn
         }
     }
 
-    // reciving Acks
+    // receiving Acks
     if (readPackage(ack_rx, 10) == 1) {
         int ack_sn = ack_rx[5];   // next expected SN in RX
 
@@ -133,7 +134,7 @@ void TX_GBN_func() {
         }
     }
 
-    // timeout makerrr
+    // timeout maker
     if (timer_running && (millis() - timer_start > (unsigned long)timeout)) {
         Serial.println("Timeout! Retransmitting window...");
 
