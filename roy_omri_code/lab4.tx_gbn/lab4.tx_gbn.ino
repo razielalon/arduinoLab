@@ -56,12 +56,12 @@ void build_frame_for_sn(uint8_t *frame, int sn) {
     frame[4] = frame[3];   // ACK/DATA = length
     frame[5] = sn;         // SN
 
-    // Payload – רק 8 בייט
+    // Payload
     for (int i = 0; i < DATA_LEN; i++) {
         frame[6 + i] = Data[i];
     }
 
-    // CRC על 14 בייט (6 header + 8 data)
+    // CRC (header + data)
     int crc_index = HEADER_SIZE + DATA_LEN; // 14
     unsigned long CRC = calculateCRC(frame, crc_index);
 
@@ -78,7 +78,7 @@ void stop_timer_if_needed() {
 void TX_GBN_func() {
     unsigned long now = millis();
 
-    // 1) שליחת פריימים חדשים כל עוד יש מקום בחלון
+    // Sending frames as long as there's room for more
     if (sn_distance(base_sn, next_sn) < N) {
         build_frame_for_sn(frame_tx, next_sn);
 
@@ -96,14 +96,14 @@ void TX_GBN_func() {
         }
     }
 
-    // 2) קליטת ACK-ים
+    // reciving Acks
     if (readPackage(ack_rx, 10) == 1) {
-        int ack_sn = ack_rx[5];   // next expected SN בצד RX
+        int ack_sn = ack_rx[5];   // next expected SN in RX
 
         int dist_base_ack  = sn_distance(base_sn, ack_sn);
         int dist_base_next = sn_distance(base_sn, next_sn);
 
-        // ack_sn באמת מקדם את החלון ונמצא בתוך התחום [base_sn+1 .. next_sn]
+        // is ack_sn in right range
         if (dist_base_ack > 0 && dist_base_ack <= dist_base_next) {
 
             unsigned long sample_rtt = millis() - timer_start;
@@ -133,7 +133,7 @@ void TX_GBN_func() {
         }
     }
 
-    // 3) Timeout – משדרים מחדש את כל הפריימים הלא מאושרים
+    // timeout makerrr
     if (timer_running && (millis() - timer_start > (unsigned long)timeout)) {
         Serial.println("Timeout! Retransmitting window...");
 

@@ -18,7 +18,7 @@ static int N_counter = 0;
 float total_frames = 0, bad_frames = 0, succ_frame = 0; 
 float eff = 0.0;
 
-uint8_t ack_frame[10];  // ACK גלובלי לחלון שלם
+uint8_t ack_frame[10];  // Global ack
 
 void setup() {
     Serial.begin(115200);
@@ -49,7 +49,7 @@ void RX_func() {
         uint8_t destination_address = frame_rx[0];
         uint8_t source_address      = frame_rx[1];
         uint8_t frame_type          = frame_rx[2];
-        uint8_t length              = frame_rx[3];   // אמור להיות DATA_LEN
+        uint8_t length              = frame_rx[3]; 
         int     received_sn         = frame_rx[5];  
 
         if (length > DATA_LEN) {
@@ -71,13 +71,13 @@ void RX_func() {
 
         unsigned long calculated_crc = calculateCRC(frame_rx, crc_index);
 
-        // ========= 1: CRC לא תקין =========
+        // check bad crc
         if (calculated_crc != received_crc) {
             Serial.println("CRC mismatch");
             Serial.println();  
             bad_frames++;
 
-            // שולחים ACK על הפריים האחרון הרציף שקיבלנו (expected_frame)
+            // ack on the latest frame
             ack_frame[0] = 0x09;
             ack_frame[1] = 0x19;
             ack_frame[2] = 0;
@@ -90,7 +90,7 @@ void RX_func() {
             ack_frame[9] =  calculated_crc        & 0xFF;
         }
 
-        // ========= 2: פריים תקין ובסדר =========
+        // frame is okay
         else if (received_sn == expected_frame) {
             succ_frame++;
 
@@ -103,31 +103,10 @@ void RX_func() {
             Serial.println();  
             Serial.println();  
 
-            // מעדכנים את ה-SN הבא הצפוי
+            // updating the next frame
             expected_frame = (expected_frame + 1) % N;
 
-            // בונים ACK מצטבר ל-SN הבא הצפוי
-            ack_frame[0] = 0x09;
-            ack_frame[1] = 0x19;
-            ack_frame[2] = 0;
-            ack_frame[3] = 0;
-            ack_frame[4] = 0;
-            ack_frame[5] = expected_frame;  // cumulative ACK
-            ack_frame[6] = (calculated_crc >> 24) & 0xFF;
-            ack_frame[7] = (calculated_crc >> 16) & 0xFF;
-            ack_frame[8] = (calculated_crc >> 8)  & 0xFF;
-            ack_frame[9] =  calculated_crc        & 0xFF;
-        }
-
-        // ========= 3: מחוץ לסדר =========
-        else {
-            bad_frames++;
-            Serial.print("Out of order frame received. Expected SN: ");
-            Serial.print(expected_frame);
-            Serial.print(", got: ");
-            Serial.println(received_sn);
-
-            // שולחים ACK על הפריים האחרון הרציף שקיבלנו (expected_frame)
+            // ack building
             ack_frame[0] = 0x09;
             ack_frame[1] = 0x19;
             ack_frame[2] = 0;
@@ -140,7 +119,28 @@ void RX_func() {
             ack_frame[9] =  calculated_crc        & 0xFF;
         }
 
-        // ========= סיום חלון =========
+        // out of order then
+        else {
+            bad_frames++;
+            Serial.print("Out of order frame received. Expected SN: ");
+            Serial.print(expected_frame);
+            Serial.print(", got: ");
+            Serial.println(received_sn);
+
+            // ack on the last good frame
+            ack_frame[0] = 0x09;
+            ack_frame[1] = 0x19;
+            ack_frame[2] = 0;
+            ack_frame[3] = 0;
+            ack_frame[4] = 0;
+            ack_frame[5] = expected_frame;
+            ack_frame[6] = (calculated_crc >> 24) & 0xFF;
+            ack_frame[7] = (calculated_crc >> 16) & 0xFF;
+            ack_frame[8] = (calculated_crc >> 8)  & 0xFF;
+            ack_frame[9] =  calculated_crc        & 0xFF;
+        }
+
+        // finish the window
         if (N_counter == N) {
             Serial.println("Sending ACK frame...");
             int send_result = 0;
