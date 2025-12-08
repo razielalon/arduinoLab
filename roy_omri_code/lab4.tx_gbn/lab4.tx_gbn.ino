@@ -30,7 +30,7 @@ void setup() {
     Serial.begin(115200);
     while (!Serial) { ; }
 
-    setAddress(TX, 9);
+    setAddress(TX, 1);
 
     Serial.print("Starting in mode: TX\nGBN TX Started N = ");
     Serial.println(N);

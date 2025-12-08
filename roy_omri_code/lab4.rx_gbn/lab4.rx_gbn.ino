@@ -22,7 +22,7 @@ uint8_t ack_frame[10];  // ACK גלובלי לחלון שלם
 
 void setup() {
     Serial.begin(115200);
-    setAddress(RX, 9);
+    setAddress(RX, 1);
     Serial.println("Starting in mode: RX");
     Serial.println("GBN RX Started");
     Serial.print("FRAME_SIZE = ");
