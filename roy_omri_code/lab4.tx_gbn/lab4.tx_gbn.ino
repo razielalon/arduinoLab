@@ -139,6 +139,7 @@ void TX_GBN_func() {
         Serial.println("Timeout! Retransmitting window...");
 
         int sn = base_sn;
+        // retransmit all frames in the window(from base_sn to next_sn-1) - we are assuming that all the frames in the window are lost
         while (sn != next_sn) {
             build_frame_for_sn(frame_tx, sn);
             int sent = sendPackage(frame_tx, FRAME_SIZE);
@@ -148,7 +149,7 @@ void TX_GBN_func() {
             }
             sn = (sn + 1) % N;
         }
-
+        // start timer again
         timer_start   = millis();
         timer_running = true;
     }
