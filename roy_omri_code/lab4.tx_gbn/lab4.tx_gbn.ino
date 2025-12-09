@@ -88,31 +88,33 @@ void TX_GBN_func() {
             Serial.print("Sent frame with SN = ");
             Serial.println(next_sn);
 
-            if (base_sn == next_sn) { // the specific moment when we transition from idle to busy (window was empty, now has 1 frame), its the time to start the timer, because we have unACKed frames now, and there is one timer for the whole window
+            if (base_sn == next_sn) { // if we are sending the first frame in the window, start the timer, timer will reset on ACK reception
                 timer_start   = now;
                 timer_running = true;
             }
 
-            next_sn = (next_sn + 1) % N; // advance next_sn
+            next_sn = (next_sn + 1) % N; // advance next_sn (modulo N so the window size will be always bigger than SN space)
         }
     }
 
     // receiving Acks
-    if (readPackage(ack_rx, 10) == 1) {
-        int ack_sn = ack_rx[5];   // next expected SN in RX
+    if (readPackage(ack_rx, 10) == 1) {// successfully received an ACK with size 10
+        int ack_sn = ack_rx[5];   // next expected SN in RX side
 
-        int dist_base_ack  = sn_distance(base_sn, ack_sn);
-        int dist_base_next = sn_distance(base_sn, next_sn);
+        int dist_base_ack  = sn_distance(base_sn, ack_sn); // distance from base_sn to ack_sn
+        int dist_base_next = sn_distance(base_sn, next_sn); // distance from base_sn to next_sn
 
-        // is ack_sn in right range
-        if (dist_base_ack > 0 && dist_base_ack <= dist_base_next) {
+        // is ack_sn is useful or garbage?
+        if (dist_base_ack > 0 && dist_base_ack <= dist_base_next) { // second term is extra safety
+        // if statement explanation:
+        // dist_base_ack > 0  <=>  ack_sn is ahead of base_sn (ack to some package that is in the window)
+        // dist_base_ack <= dist_base_next  <=>  ack_sn is not beyond next_sn (ack to some package that is not yet sent)
 
             unsigned long sample_rtt = millis() - timer_start;
             rtt_samples++;
 
-            timeout =
-                ((float)(rtt_samples - 1) / (float)rtt_samples) * timeout +
-                (1.0f / (float)rtt_samples) * (float)sample_rtt;
+            timeout = ((float)(rtt_samples - 1) / (float)rtt_samples) * timeout +
+                      (1.0f / (float)rtt_samples) * (float)sample_rtt;
 
             Serial.print("ACK received. next expected SN = ");
             Serial.println(ack_sn);
@@ -123,11 +125,12 @@ void TX_GBN_func() {
             Serial.println(timeout);
             Serial.println();
 
-            base_sn = ack_sn;
+            base_sn = ack_sn; // advance base_sn to ack_sn(because ack_sn is the next package that the RX side expects)
 
-            if (base_sn == next_sn) {
-                stop_timer_if_needed();
-            } else {
+            if (base_sn == next_sn) { // all outstanding frames are ACKed
+                timer_running = false; 
+            } else { // there are still outstanding frames that need ACKs
+                // restart timer
                 timer_start   = millis();
                 timer_running = true;
             }
@@ -135,7 +138,7 @@ void TX_GBN_func() {
     }
 
     // timeout maker
-    if (timer_running && (millis() - timer_start > (unsigned long)timeout)) {
+    if (timer_running && (millis() - timer_start > (unsigned long)timeout)) { // check if timeout occurred
         Serial.println("Timeout! Retransmitting window...");
 
         int sn = base_sn;
