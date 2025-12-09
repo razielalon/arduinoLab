@@ -71,9 +71,6 @@ void build_frame_for_sn(uint8_t *frame, int sn) {
     frame[crc_index + 3] =  CRC        & 0xFF;
 }
 
-void stop_timer_if_needed() {
-    timer_running = false;
-}
 
 void TX_GBN_func() {
     unsigned long now = millis();
