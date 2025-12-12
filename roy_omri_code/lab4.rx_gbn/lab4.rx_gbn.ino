@@ -156,7 +156,7 @@ void RX_func() {
 
         
         // calculates efficiency and error probabillity
-        eff = ((succ_frame * 64.0) / (float(millis()) * LINE_RATE)) * 1000;
+        eff = ((succ_frame * 64.0) / (float(millis()) * LINE_RATE)) * 1000; // Todo - replace 64 with real data length
         total_frames++; 
         Error_prob = (bad_frames / total_frames);
 
