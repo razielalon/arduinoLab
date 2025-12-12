@@ -144,27 +144,28 @@ void RX_func() {
             ack_frame[9] =  calculated_crc        & 0xFF;
         }
 
-        // finish the window
-        if (N_counter == N) {
-            Serial.println("Sending ACK frame...");
-            int send_result = 0;
-            while (send_result != 1) {
-                send_result = sendPackage(ack_frame, 10);
-            }
-            Serial.print("Sent ACK (next expected SN): ");
-            Serial.println(ack_frame[5]);
+        // sending ack frame 
+        Serial.println("Sending ACK frame...");
+        int send_result = 0;
+        while (send_result != 1) {
+            send_result = sendPackage(ack_frame, 10);
+        }
+        Serial.print("Sent ACK (next expected SN): ");
+        Serial.println(ack_frame[5]);
 
+        
+        // calculates efficiency and error probabillity
+        eff = ((succ_frame * 64.0) / (float(millis()) * LINE_RATE)) * 1000;
+        total_frames++; 
+        Error_prob = (bad_frames / total_frames);
+
+        Serial.print("Efficiency = ");
+        Serial.println(eff, 3);
+        Serial.print("Error probability = ");
+        Serial.println(Error_prob, 3);
+        Serial.println();
+        if (N_counter == N){
             N_counter  = 0;
-
-            eff = ((succ_frame * 64.0) / (float(millis()) * LINE_RATE)) * 1000;
-            total_frames++; 
-            Error_prob = (bad_frames / total_frames);
-
-            Serial.print("Efficiency = ");
-            Serial.println(eff, 3);
-            Serial.print("Error probability = ");
-            Serial.println(Error_prob, 3);
-            Serial.println();
         }
     }
 }
